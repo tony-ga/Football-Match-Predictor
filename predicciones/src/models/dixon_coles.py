@@ -325,7 +325,7 @@ class DixonColesModel:
         if (self.is_fitted_ and
                 home_name in (self.alpha_ or {}) and
                 away_name in (self.alpha_ or {})):
-            return self._predict_lambdas_trained(home_name, away_name, home_features)
+            return self._predict_lambdas_trained(home_name, away_name, home_features, away_features)
         else:
             return self._predict_lambdas_heuristic(home_features, away_features)
 
@@ -334,6 +334,7 @@ class DixonColesModel:
         home_name: str,
         away_name: str,
         home_features: Dict[str, Any],
+        away_features: Dict[str, Any],
     ) -> Tuple[float, float]:
         """Use trained DC parameters to estimate lambdas."""
         alpha_h = self.alpha_[home_name]
@@ -347,7 +348,7 @@ class DixonColesModel:
 
         # Apply feature-based context modifier on top of DC params
         ctx_h = home_features.get('context_modifier', 0.0)
-        ctx_a = home_features.get('context_modifier', 0.0)
+        ctx_a = away_features.get('context_modifier', 0.0)
 
         lambda_h *= np.exp(ctx_h)
         lambda_a *= np.exp(ctx_a)
