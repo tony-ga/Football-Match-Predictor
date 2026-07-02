@@ -102,9 +102,17 @@ def aggregate_squad(
         if pos in pos_counts:
             pos_counts[pos] += 1
 
-    squad_quality = np.mean(overall_scores) / 0.3 if np.mean(overall_scores) > 0 else 0.5
-    attack_quality = np.mean(attack_scores) / 0.3 if np.mean(attack_scores) > 0 else 0.5
-    defense_quality = np.mean(defense_scores) / 0.3 if np.mean(defense_scores) > 0 else 0.5
+    # Normalizar por el valor esperado de un jugador promedio (rating=6, forma=6):
+    # effective = 0.6*6 + 0.4*6 = 6.0  →  normalized = 0.6
+    # overall score promedio para MID weight 0.30 → 0.6 * 0.30 = 0.180
+    # Para un squad mixto real: expected mean overall_score ≈ 0.140
+    _expected_overall = 0.140
+    _expected_attack  = 0.070   # FWD heavy: 0.6 * 0.70 * (1/4 players) ≈ 0.105, avg with DEF/MID/GK
+    _expected_defense = 0.080
+
+    squad_quality  = float(np.clip(np.mean(overall_scores)  / _expected_overall,  0.0, 1.0)) if overall_scores  else 0.5
+    attack_quality = float(np.clip(np.mean(attack_scores)   / _expected_attack,   0.0, 1.0)) if attack_scores   else 0.5
+    defense_quality= float(np.clip(np.mean(defense_scores)  / _expected_defense,  0.0, 1.0)) if defense_scores  else 0.5
 
     # Key player impact: average of top 3 impacts
     top_impacts = sorted(impacts, reverse=True)[:3]
@@ -141,7 +149,7 @@ def _neutral_squad() -> Dict[str, float]:
 
 def squad_quality_to_multiplier(
     squad_metrics: Dict[str, float],
-    weight: float = 0.15,
+    weight: float = 0.22,   # ampliado de 0.15 → 0.22
 ) -> float:
     """
     Convert squad quality into a lambda multiplier.

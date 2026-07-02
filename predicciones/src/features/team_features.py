@@ -46,16 +46,22 @@ def extract_team_features(
     # ------------------------------------------------------------------
     # 1. Historical stats (from CONTEXTO)
     # ------------------------------------------------------------------
-    goals_scored_avg = _safe_rate(
+    ranking = ctx.ranking_fifa or 50.0
+    goals_scored_avg = _safe_rate_with_prior(
         ctx.goles_marcados_ultimos_6,
-        ctx.partidos_ultimos_6_meses
+        ctx.partidos_ultimos_6_meses,
+        ranking_fifa=ranking,
+        is_goals_scored=True,
     )
-    goals_conceded_avg = _safe_rate(
+    goals_conceded_avg = _safe_rate_with_prior(
         ctx.goles_recibidos_ultimos_6,
-        ctx.partidos_ultimos_6_meses
+        ctx.partidos_ultimos_6_meses,
+        ranking_fifa=ranking,
+        is_goals_scored=False,
     )
-    xg_favor = ctx.xg_promedio_favor or goals_scored_avg  # fallback to goals
-    xg_contra = ctx.xg_promedio_contra or goals_conceded_avg
+    # Si no hay xG real, pasar None para evitar blend duplicado en compute_attack_rating
+    xg_favor = ctx.xg_promedio_favor if (ctx.xg_promedio_favor and ctx.xg_promedio_favor > 0) else None
+    xg_contra = ctx.xg_promedio_contra if (ctx.xg_promedio_contra and ctx.xg_promedio_contra > 0) else None
 
     total_h2h = (ctx.head_to_head_wins + ctx.head_to_head_draws + ctx.head_to_head_losses)
     win_rate = _safe_rate(ctx.victorias_ultimos_6, ctx.partidos_ultimos_6_meses)
@@ -103,7 +109,7 @@ def extract_team_features(
     squad_metrics = aggregate_squad(team.JUGADORES)
     squad_multiplier = squad_quality_to_multiplier(
         squad_metrics,
-        weight=config.get('feature_weights', {}).get('squad_quality', 0.15)
+        weight=config.get('feature_weights', {}).get('squad_quality', 0.22)
     )
 
     # ------------------------------------------------------------------
@@ -194,6 +200,36 @@ def _safe_rate(numerator, denominator, default: float = 1.2) -> float:
         return n / d
     except (TypeError, ValueError):
         return default
+
+
+def _safe_rate_with_prior(
+    numerator,
+    denominator,
+    ranking_fifa: float = 50.0,
+    is_goals_scored: bool = True,
+) -> float:
+    """
+    Safe division that uses FIFA ranking as a Bayesian prior
+    when no historical data is available.
+    Rank 1 team without data → estimated as 1.8 goals/game scored, 0.7 conceded
+    Rank 100 team without data → estimated as 1.0 goals/game scored, 1.4 conceded
+    """
+    try:
+        n = float(numerator or 0)
+        d = float(denominator or 0)
+        if d > 0:
+            return n / d
+        # No data: derive prior from ranking
+        # normalized: rank 1 → 1.0, rank 100 → 0.0, rank 200 → -1.0
+        rank_norm = max(-1.0, (100.0 - ranking_fifa) / 100.0)
+        if is_goals_scored:
+            # Scored: strong teams score more
+            return 1.35 + 0.45 * rank_norm   # rank 1 → 1.80, rank 50 → 1.13, rank 100 → 0.90
+        else:
+            # Conceded: weak teams concede more
+            return 1.35 - 0.45 * rank_norm   # rank 1 → 0.90, rank 50 → 1.13, rank 100 → 1.80
+    except (TypeError, ValueError):
+        return 1.2
 
 
 def _calc_ppg(wins, draws, losses, total, default: float = 1.5) -> float:

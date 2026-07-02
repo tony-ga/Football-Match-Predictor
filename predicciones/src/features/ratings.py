@@ -33,13 +33,15 @@ def compute_attack_rating(
     base = goals_scored_avg / LEAGUE_AVG_GOALS
 
     # Blend with xG if available (pseudo-xG if not directly measured)
-    if xg_avg is not None and xg_avg > 0:
+    if xg_avg is not None and xg_avg > 0 and xg_avg != goals_scored_avg:
+        # Solo blendear si xG es un dato diferente a los goles reales
+        # Si xg_avg == goals_scored_avg, es un fallback duplicado — ignorarlo
         xg_factor = xg_avg / LEAGUE_AVG_GOALS
-        base = 0.6 * base + 0.4 * xg_factor  # blend real goals + xG
+        base = 0.55 * base + 0.45 * xg_factor  # xG pesa más que goles brutos
 
     # Collective modifiers (normalized to [-0.15, +0.15] range)
-    coll_boost = (efficiency - 5.0) / 5.0 * 0.10
-    creat_boost = (creativity - 5.0) / 5.0 * 0.05
+    coll_boost = (efficiency - 5.0) / 5.0 * 0.18
+    creat_boost = (creativity - 5.0) / 5.0 * 0.10
 
     # Ranking factor (slight adjustment for elite teams)
     rating = base * ranking_factor * (1 + coll_boost + creat_boost)
@@ -66,8 +68,8 @@ def compute_defense_rating(
         base = 0.6 * base + 0.4 * xg_factor
 
     # Collective modifiers
-    solid_reduction = (solidity - 5.0) / 5.0 * 0.10
-    press_reduction = (pressing - 5.0) / 5.0 * 0.05
+    solid_reduction = (solidity - 5.0) / 5.0 * 0.18
+    press_reduction = (pressing - 5.0) / 5.0 * 0.10
 
     defense = base * (1 - solid_reduction - press_reduction)
 
@@ -91,8 +93,9 @@ def compute_form_factor(
     form_score = 0.7 * form_normalized + 0.3 * win_rate  # 0..1
 
     # Convert to multiplier: neutral at form_score=0.5
-    # Range: [0.85, 1.15]
-    form_multiplier = 0.85 + 0.30 * form_score
+    # Range: [0.72, 1.28] in vez de [0.85, 1.15]
+    # Equipo en forma perfecta: 1.28, equipo sin victorias: 0.72
+    form_multiplier = 0.72 + 0.56 * form_score
 
     # Fatigue from accumulated matches
     fatigue_penalty = min(0.05, (partidos_acumulados - 1) * 0.02)
@@ -112,13 +115,12 @@ def compute_ranking_factor(ranking_fifa: float, reference_rank: float = 50.0) ->
     """
     Convert FIFA ranking to a multiplicative factor.
     Rank 1 = strong boost, Rank 211 = penalty.
-    Returns multiplier in [0.85, 1.15].
+    Returns multiplier in [0.65, 1.35].
     """
-    # Normalize: rank 1 -> 1.0, rank 100 -> 0.0, beyond 100 -> negative
-    normalized = max(0, (100 - ranking_fifa) / 100)
-    # Map to [0.85, 1.15]
-    factor = 0.85 + 0.30 * normalized
-    return float(np.clip(factor, 0.85, 1.15))
+    # Rank 1 → 1.35, Rank 50 → 1.05, Rank 100 → 0.75, Rank 150+ → 0.65
+    normalized = max(0, (reference_rank - ranking_fifa) / reference_rank)
+    factor = 0.65 + 0.70 * normalized
+    return float(np.clip(factor, 0.65, 1.35))
 
 
 def compute_h2h_factor(
@@ -134,8 +136,9 @@ def compute_h2h_factor(
     if total == 0:
         return 1.0
     win_ratio = (h2h_wins + 0.5 * h2h_draws) / total
-    # Map [0, 1] -> [0.95, 1.05]
-    return float(0.95 + 0.10 * win_ratio)
+    # Nuevo rango: [0.88, 1.12] en vez de [0.95, 1.05]
+    # H2H dominante → 1.12, H2H muy adverso → 0.88
+    return float(0.88 + 0.24 * win_ratio)
 
 
 def estimate_lambda(
