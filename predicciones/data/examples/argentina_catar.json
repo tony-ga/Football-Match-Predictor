@@ -1,0 +1,106 @@
+{
+  "metadata": {
+    "match_id": "wc_arg_qat",
+    "home_team": "Argentina",
+    "away_team": "Catar",
+    "competition": "World Cup",
+    "competition_type": "world_cup",
+    "stage": "group",
+    "neutral_venue": true
+  },
+  "team1": {
+    "nombre": "Argentina",
+    "FACTORES_TACTICOS": {
+      "pressing_intensidad": 8.5,
+      "bloque_defensivo": 6.0,
+      "transiciones_rapidas": 7.5,
+      "posesion_preferida": 8.0,
+      "linea_defensiva_alta": 7.0,
+      "variabilidad_tactica": 8.5,
+      "juego_aereo": 6.5,
+      "duelos_individuales": 8.0
+    },
+    "FACTORES_COLECTIVOS": {
+      "cohesion_grupal": 9.5,
+      "experiencia_internacional": 9.0,
+      "liderazgo_cancha": 9.5,
+      "mentalidad_competitiva": 9.5,
+      "solidez_defensiva": 8.5,
+      "creatividad_ofensiva": 9.0,
+      "eficiencia_finalizacion": 8.5,
+      "ritmo_juego": 8.0,
+      "discipline": 8.0
+    },
+    "CONTEXTO": {
+      "ranking_fifa": 1,
+      "partidos_ultimos_6_meses": 8,
+      "victorias_ultimos_6": 7,
+      "derrotas_ultimos_6": 0,
+      "empates_ultimos_6": 1,
+      "goles_marcados_ultimos_6": 2.5,
+      "goles_recibidos_ultimos_6": 0.4,
+      "xg_promedio_favor": 2.2,
+      "xg_promedio_contra": 0.5,
+      "dias_desde_ultimo_partido": 5
+    },
+    "FACTORES_EXTERNOS": {
+      "localía": 0.0,
+      "fatiga_acumulada": 3.0,
+      "motivacion": 9.0,
+      "importancia_partido": 8.0,
+      "presion_mediatica": 8.0
+    },
+    "JUGADORES": [
+      {"nombre": "Messi", "posicion": "FWD", "rating": 9.5, "forma_actual": 9.0, "titular": true, "impacto_equipo": 9.5},
+      {"nombre": "Dibu", "posicion": "GK", "rating": 8.5, "forma_actual": 8.5, "titular": true, "impacto_equipo": 8.0},
+      {"nombre": "De Paul", "posicion": "MID", "rating": 8.0, "forma_actual": 8.0, "titular": true, "impacto_equipo": 8.5}
+    ]
+  },
+  "team2": {
+    "nombre": "Catar",
+    "FACTORES_TACTICOS": {
+      "pressing_intensidad": 4.0,
+      "bloque_defensivo": 8.0,
+      "transiciones_rapidas": 5.0,
+      "posesion_preferida": 4.0,
+      "linea_defensiva_alta": 3.0,
+      "variabilidad_tactica": 4.0,
+      "juego_aereo": 5.0,
+      "duelos_individuales": 4.5
+    },
+    "FACTORES_COLECTIVOS": {
+      "cohesion_grupal": 6.5,
+      "experiencia_internacional": 4.0,
+      "liderazgo_cancha": 5.0,
+      "mentalidad_competitiva": 6.0,
+      "solidez_defensiva": 4.5,
+      "creatividad_ofensiva": 4.0,
+      "eficiencia_finalizacion": 4.5,
+      "ritmo_juego": 5.0,
+      "discipline": 6.0
+    },
+    "CONTEXTO": {
+      "ranking_fifa": 60,
+      "partidos_ultimos_6_meses": 6,
+      "victorias_ultimos_6": 1,
+      "derrotas_ultimos_6": 4,
+      "empates_ultimos_6": 1,
+      "goles_marcados_ultimos_6": 0.8,
+      "goles_recibidos_ultimos_6": 2.2,
+      "xg_promedio_favor": 0.7,
+      "xg_promedio_contra": 2.0,
+      "dias_desde_ultimo_partido": 5
+    },
+    "FACTORES_EXTERNOS": {
+      "localía": 0.0,
+      "fatiga_acumulada": 4.0,
+      "motivacion": 8.0,
+      "importancia_partido": 8.0,
+      "presion_mediatica": 3.0
+    },
+    "JUGADORES": [
+      {"nombre": "Afif", "posicion": "FWD", "rating": 6.5, "forma_actual": 6.0, "titular": true, "impacto_equipo": 8.0},
+      {"nombre": "Al Haidos", "posicion": "MID", "rating": 6.0, "forma_actual": 5.5, "titular": true, "impacto_equipo": 7.0}
+    ]
+  }
+}

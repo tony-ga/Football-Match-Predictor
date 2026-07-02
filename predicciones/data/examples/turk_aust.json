@@ -1,0 +1,153 @@
+{
+  "metadata": {
+    "match_id": "WC2026-GK-M23-POR-COD",
+    "home_team": "Portugal",
+    "away_team": "RD Congo",
+    "competition": "FIFA World Cup 2026",
+    "competition_type": "world_cup",
+    "stage": "group",
+    "group": "K",
+    "neutral_venue": true,
+    "venue": "NRG Stadium",
+    "city": "Houston, Texas",
+    "kickoff_local": "2026-06-17T12:00:00-05:00"
+  },
+  "team1": {
+    "nombre": "Portugal",
+    "FACTORES_TACTICOS": {
+      "pressing_intensidad": 8.0,
+      "bloque_defensivo": 7.5,
+      "transiciones_rapidas": 8.0,
+      "posesion_preferida": 8.0,
+      "linea_defensiva_alta": 7.5,
+      "variabilidad_tactica": 8.0,
+      "juego_aereo": 7.5,
+      "duelos_individuales": 8.0
+    },
+    "FACTORES_COLECTIVOS": {
+      "cohesion_grupal": 8.0,
+      "experiencia_internacional": 8.5,
+      "liderazgo_cancha": 8.5,
+      "mentalidad_competitiva": 8.5,
+      "solidez_defensiva": 8.0,
+      "creatividad_ofensiva": 8.0,
+      "eficiencia_finalizacion": 8.0,
+      "ritmo_juego": 8.0,
+      "discipline": 7.5
+    },
+    "CONTEXTO": {
+      "ranking_fifa": 5,
+      "partidos_ultimos_6_meses": 6,
+      "victorias_ultimos_6": 4,
+      "derrotas_ultimos_6": 1,
+      "empates_ultimos_6": 1,
+      "goles_marcados_ultimos_6": 1.9,
+      "goles_recibidos_ultimos_6": 1.0,
+      "xg_promedio_favor": 2.0,
+      "xg_promedio_contra": 1.1,
+      "dias_desde_ultimo_partido": 7
+    },
+    "FACTORES_EXTERNOS": {
+      "localía": 0.0,
+      "fatiga_acumulada": 3.5,
+      "motivacion": 9.0,
+      "importancia_partido": 9.0,
+      "presion_mediatica": 8.5
+    },
+    "JUGADORES": [
+      {
+        "nombre": "Cristiano Ronaldo",
+        "posicion": "FWD",
+        "rating": 8.5,
+        "forma_actual": 8.0,
+        "titular": true,
+        "impacto_equipo": 8.5
+      },
+      {
+        "nombre": "Bruno Fernandes",
+        "posicion": "MID",
+        "rating": 8.5,
+        "forma_actual": 8.0,
+        "titular": true,
+        "impacto_equipo": 8.5
+      },
+      {
+        "nombre": "Bernardo Silva",
+        "posicion": "MID",
+        "rating": 8.5,
+        "forma_actual": 8.0,
+        "titular": true,
+        "impacto_equipo": 8.5
+      }
+    ]
+  },
+  "team2": {
+    "nombre": "RD Congo",
+    "FACTORES_TACTICOS": {
+      "pressing_intensidad": 7.0,
+      "bloque_defensivo": 7.5,
+      "transiciones_rapidas": 7.5,
+      "posesion_preferida": 6.5,
+      "linea_defensiva_alta": 6.5,
+      "variabilidad_tactica": 7.0,
+      "juego_aereo": 7.0,
+      "duelos_individuales": 7.5
+    },
+    "FACTORES_COLECTIVOS": {
+      "cohesion_grupal": 8.0,
+      "experiencia_internacional": 7.5,
+      "liderazgo_cancha": 7.5,
+      "mentalidad_competitiva": 8.5,
+      "solidez_defensiva": 7.5,
+      "creatividad_ofensiva": 7.0,
+      "eficiencia_finalizacion": 7.0,
+      "ritmo_juego": 7.5,
+      "discipline": 7.5
+    },
+    "CONTEXTO": {
+      "ranking_fifa": 46,
+      "partidos_ultimos_6_meses": 6,
+      "victorias_ultimos_6": 3,
+      "derrotas_ultimos_6": 2,
+      "empates_ultimos_6": 1,
+      "goles_marcados_ultimos_6": 1.4,
+      "goles_recibidos_ultimos_6": 1.3,
+      "xg_promedio_favor": 1.5,
+      "xg_promedio_contra": 1.3,
+      "dias_desde_ultimo_partido": 7
+    },
+    "FACTORES_EXTERNOS": {
+      "localía": 0.0,
+      "fatiga_acumulada": 3.5,
+      "motivacion": 9.0,
+      "importancia_partido": 9.0,
+      "presion_mediatica": 7.5
+    },
+    "JUGADORES": [
+      {
+        "nombre": "Yoane Wissa",
+        "posicion": "FWD",
+        "rating": 7.5,
+        "forma_actual": 7.5,
+        "titular": true,
+        "impacto_equipo": 7.5
+      },
+      {
+        "nombre": "Cédric Bakambu",
+        "posicion": "FWD",
+        "rating": 7.5,
+        "forma_actual": 7.0,
+        "titular": true,
+        "impacto_equipo": 7.5
+      },
+      {
+        "nombre": "Chancel Mbemba",
+        "posicion": "DEF",
+        "rating": 7.5,
+        "forma_actual": 7.5,
+        "titular": true,
+        "impacto_equipo": 7.5
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "response": [
+    {
+      "fixture": {
+        "id": 100,
+        "date": "2026-06-15T18:00:00Z",
+        "neutral": true
+      },
+      "league": {
+        "name": "World Cup"
+      },
+      "teams": {
+        "home": {
+          "name": "Argentina"
+        },
+        "away": {
+          "name": "Qatar"
+        }
+      },
+      "goals": {
+        "home": 3,
+        "away": 0
+      }
+    }
+  ]
+}

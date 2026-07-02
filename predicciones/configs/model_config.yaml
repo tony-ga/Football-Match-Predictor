@@ -1,0 +1,119 @@
+# ============================================================
+# Football Match Prediction System - Configuration
+# ============================================================
+
+model:
+  version: "1.0.0"
+  name: "dixon_coles_football"
+
+# Score matrix dimensions (goals from 0 to max_goals inclusive)
+matrix:
+  max_goals: 8  # generates (max_goals+1) x (max_goals+1) matrix
+
+# Dixon-Coles specific parameters
+dixon_coles:
+  rho: -0.13          # low-score correlation correction (typical: -0.1 to -0.2)
+  home_advantage: 0.25 # log-scale home advantage prior
+  time_decay_xi: 0.003 # temporal decay per day (0 = no decay)
+  min_lambda: 0.05    # floor for expected goals
+  max_lambda: 5.0     # ceiling for expected goals
+
+# Feature weights for lambda estimation
+# These are used when no trained DC parameters are available (prior / heuristic mode)
+feature_weights:
+  # Core signals (sum should be ~1.0)
+  attack_rating: 0.30
+  defense_rating: 0.25
+  recent_form: 0.20
+  squad_quality: 0.15
+  head_to_head: 0.10
+
+  # Contextual modifiers (applied as multiplicative adjustments, small values)
+  home_advantage: 0.10   # added to home lambda
+  fatigue_penalty: 0.05  # subtracted if high fatigue
+  travel_penalty: 0.03
+  motivation_boost: 0.04
+  pressure_factor: 0.02
+  weather_factor: 0.01
+  referee_factor: 0.01
+
+# Halftime model - calibrated proportions from historical data
+# These are priors; they get calibrated with real data
+halftime:
+  lambda_ht_fraction: 0.45  # HT goals are ~45% of FT (slightly less than 0.5)
+  calibrated: false          # Set true after running calibration
+
+# Per-market calibration settings
+calibration:
+  method: "isotonic"    # Options: isotonic, platt, beta
+  min_samples: 50       # Minimum samples needed to calibrate
+  cv_folds: 5
+  markets:
+    - name: "1x2"
+      metric: "log_loss"
+      calibrator_file: "output/calibrators/cal_1x2.pkl"
+    - name: "btts"
+      metric: "brier_score"
+      calibrator_file: "output/calibrators/cal_btts.pkl"
+    - name: "over_under_25"
+      metric: "brier_score"
+      calibrator_file: "output/calibrators/cal_ou25.pkl"
+    - name: "over_under_15"
+      metric: "brier_score"
+      calibrator_file: "output/calibrators/cal_ou15.pkl"
+    - name: "over_under_35"
+      metric: "brier_score"
+      calibrator_file: "output/calibrators/cal_ou35.pkl"
+
+# Sanity checker thresholds (warnings only, no hard clamps)
+sanity:
+  # Emit warning if favorite win prob < this given lambda ratio
+  min_fav_prob_given_ratio:
+    "2.0": 0.55   # if lambda_h/lambda_a >= 2.0, warn if P(H) < 0.55
+    "3.0": 0.70   # if lambda_h/lambda_a >= 3.0, warn if P(H) < 0.70
+  # Emit warning if BTTS is high but underdog lambda is very low
+  btts_high_threshold: 0.50
+  underdog_low_lambda: 0.40
+  # Emit warning if P(1-1) > this in very unequal matches
+  draw_11_high_threshold: 0.12
+  unequal_lambda_ratio: 2.5
+  # Emit warning if clean sheet prob inconsistent with lambda
+  cs_lambda_threshold: 1.5  # if lambda > this, CS should be low
+  cs_high_threshold: 0.35
+
+# Evaluation policy
+evaluation:
+  primary_metric_1x2: "log_loss"
+  primary_metric_binary: "brier_score"
+  reliability_plot_bins: 10
+  backtesting_window_days: 365
+
+# Optional modules
+optional_modules:
+  corners: false       # requires corners_avg in JSON
+  lgbm_classifier: false  # ML layer for 1X2
+  monte_carlo: true
+  monte_carlo_simulations: 100000
+
+# Normalization settings
+normalization:
+  method: "minmax"  # Options: minmax, zscore
+  feature_ranges:
+    rating: [0, 10]
+    form: [0, 10]
+    xg: [0, 5]
+    squad_quality: [0, 10]
+
+# API data fetching configurations
+api_data_fetching:
+  api_football_key: ""
+  football_data_token: ""
+  data_cache_dir: "./data/cache"
+  cache_ttl_hours: 1
+  max_external_matches: 10
+  wc_season: 2026
+  time_decay_phi: 0.0065
+  max_match_age_days: 1095
+  wc_weight_multiplier_group: 1.3
+  wc_weight_multiplier_knockout: 1.5
+

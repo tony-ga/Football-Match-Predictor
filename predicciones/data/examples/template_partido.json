@@ -1,0 +1,117 @@
+{
+  "metadata": {
+    "match_id": "id_del_partido",
+    "home_team": "Nombre Equipo Local",
+    "away_team": "Nombre Equipo Visitante",
+    "competition": "Nombre del Torneo",
+    "competition_type": "world_cup",
+    "stage": "group",
+    "neutral_venue": false
+  },
+  "team1": {
+    "nombre": "Nombre Equipo Local",
+    "FACTORES_TACTICOS": {
+      "pressing_intensidad": 5.0,
+      "bloque_defensivo": 5.0,
+      "transiciones_rapidas": 5.0,
+      "posesion_preferida": 5.0,
+      "linea_defensiva_alta": 5.0,
+      "variabilidad_tactica": 5.0,
+      "juego_aereo": 5.0,
+      "duelos_individuales": 5.0
+    },
+    "FACTORES_COLECTIVOS": {
+      "cohesion_grupal": 5.0,
+      "experiencia_internacional": 5.0,
+      "liderazgo_cancha": 5.0,
+      "mentalidad_competitiva": 5.0,
+      "solidez_defensiva": 5.0,
+      "creatividad_ofensiva": 5.0,
+      "eficiencia_finalizacion": 5.0,
+      "ritmo_juego": 5.0,
+      "discipline": 5.0
+    },
+    "CONTEXTO": {
+      "ranking_fifa": 50,
+      "partidos_ultimos_6_meses": 6,
+      "victorias_ultimos_6": 3,
+      "derrotas_ultimos_6": 1,
+      "empates_ultimos_6": 2,
+      "goles_marcados_ultimos_6": 1.5,
+      "goles_recibidos_ultimos_6": 1.0,
+      "xg_promedio_favor": 1.5,
+      "xg_promedio_contra": 1.0,
+      "dias_desde_ultimo_partido": 7
+    },
+    "FACTORES_EXTERNOS": {
+      "localía": 1.0,
+      "fatiga_acumulada": 3.0,
+      "motivacion": 5.0,
+      "importancia_partido": 5.0,
+      "presion_mediatica": 5.0
+    },
+    "JUGADORES": [
+      {
+        "nombre": "Jugador Estrella",
+        "posicion": "FWD",
+        "rating": 8.0,
+        "forma_actual": 8.0,
+        "titular": true,
+        "impacto_equipo": 8.5
+      }
+    ]
+  },
+  "team2": {
+    "nombre": "Nombre Equipo Visitante",
+    "FACTORES_TACTICOS": {
+      "pressing_intensidad": 5.0,
+      "bloque_defensivo": 5.0,
+      "transiciones_rapidas": 5.0,
+      "posesion_preferida": 5.0,
+      "linea_defensiva_alta": 5.0,
+      "variabilidad_tactica": 5.0,
+      "juego_aereo": 5.0,
+      "duelos_individuales": 5.0
+    },
+    "FACTORES_COLECTIVOS": {
+      "cohesion_grupal": 5.0,
+      "experiencia_internacional": 5.0,
+      "liderazgo_cancha": 5.0,
+      "mentalidad_competitiva": 5.0,
+      "solidez_defensiva": 5.0,
+      "creatividad_ofensiva": 5.0,
+      "eficiencia_finalizacion": 5.0,
+      "ritmo_juego": 5.0,
+      "discipline": 5.0
+    },
+    "CONTEXTO": {
+      "ranking_fifa": 50,
+      "partidos_ultimos_6_meses": 6,
+      "victorias_ultimos_6": 3,
+      "derrotas_ultimos_6": 1,
+      "empates_ultimos_6": 2,
+      "goles_marcados_ultimos_6": 1.5,
+      "goles_recibidos_ultimos_6": 1.0,
+      "xg_promedio_favor": 1.5,
+      "xg_promedio_contra": 1.0,
+      "dias_desde_ultimo_partido": 7
+    },
+    "FACTORES_EXTERNOS": {
+      "localía": -1.0,
+      "fatiga_acumulada": 3.0,
+      "motivacion": 5.0,
+      "importancia_partido": 5.0,
+      "presion_mediatica": 5.0
+    },
+    "JUGADORES": [
+      {
+        "nombre": "Defensa Fuerte",
+        "posicion": "DEF",
+        "rating": 7.0,
+        "forma_actual": 7.0,
+        "titular": true,
+        "impacto_equipo": 7.0
+      }
+    ]
+  }
+}
