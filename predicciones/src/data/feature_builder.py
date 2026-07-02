@@ -5,6 +5,84 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Confederation priors for fallback when no match data is available
+# (lambda_attack, lambda_defense) relative to league average
+CONFEDERATION_PRIORS = {
+    "UEFA":      (1.45, 1.10),  # Europa — alto ataque y defensa
+    "CONMEBOL":  (1.40, 1.05),  # Sudamérica
+    "CONCACAF":  (1.20, 0.95),  # Norteamérica/Centroamérica
+    "CAF":       (1.15, 0.90),  # África
+    "AFC":       (1.10, 0.88),  # Asia
+    "OFC":       (1.00, 0.85),  # Oceanía
+    "UNKNOWN":   (1.25, 1.00),  # Default si no se puede inferir
+}
+
+# Mapping de equipos conocidos a confederación
+TEAM_CONFEDERATION = {
+    # UEFA
+    "Inglaterra": "UEFA", "Francia": "UEFA", "Alemania": "UEFA",
+    "España": "UEFA", "Italia": "UEFA", "Portugal": "UEFA",
+    "Países Bajos": "UEFA", "Bélgica": "UEFA", "Croatia": "UEFA",
+    "Serbia": "UEFA", "Dinamarca": "UEFA", "Austria": "UEFA",
+    "Suiza": "UEFA", "Turquía": "UEFA", "Polonia": "UEFA",
+    "Escocia": "UEFA", "Ucrania": "UEFA", "Hungría": "UEFA",
+    "República Checa": "UEFA", "Rumania": "UEFA", "Eslovaquia": "UEFA",
+    "Eslovenia": "UEFA", "Albania": "UEFA", "Georgia": "UEFA",
+    "England": "UEFA", "France": "UEFA", "Germany": "UEFA",
+    "Spain": "UEFA", "Italy": "UEFA", "Portugal": "UEFA",
+    "Netherlands": "UEFA", "Belgium": "UEFA", "Croatia": "UEFA",
+    "Serbia": "UEFA", "Denmark": "UEFA", "Austria": "UEFA",
+    "Switzerland": "UEFA", "Turkey": "UEFA", "Poland": "UEFA",
+    "Scotland": "UEFA", "Ukraine": "UEFA", "Hungary": "UEFA",
+    "Czech Republic": "UEFA", "Romania": "UEFA", "Slovakia": "UEFA",
+    "Slovenia": "UEFA", "Albania": "UEFA", "Georgia": "UEFA",
+
+    # CONMEBOL
+    "Brasil": "CONMEBOL", "Argentina": "CONMEBOL", "Uruguay": "CONMEBOL",
+    "Colombia": "CONMEBOL", "Chile": "CONMEBOL", "Ecuador": "CONMEBOL",
+    "Paraguay": "CONMEBOL", "Perú": "CONMEBOL", "Bolivia": "CONMEBOL",
+    "Venezuela": "CONMEBOL",
+    "Brazil": "CONMEBOL", "Argentina": "CONMEBOL", "Uruguay": "CONMEBOL",
+    "Colombia": "CONMEBOL", "Chile": "CONMEBOL", "Ecuador": "CONMEBOL",
+    "Paraguay": "CONMEBOL", "Peru": "CONMEBOL", "Bolivia": "CONMEBOL",
+    "Venezuela": "CONMEBOL",
+
+    # CONCACAF
+    "México": "CONCACAF", "Estados Unidos": "CONCACAF", "Canadá": "CONCACAF",
+    "Costa Rica": "CONCACAF", "Honduras": "CONCACAF", "Jamaica": "CONCACAF",
+    "Panamá": "CONCACAF", "El Salvador": "CONCACAF", "Guatemala": "CONCACAF",
+    "Trinidad y Tobago": "CONCACAF",
+    "Mexico": "CONCACAF", "United States": "CONCACAF", "Canada": "CONCACAF",
+    "Costa Rica": "CONCACAF", "Honduras": "CONCACAF", "Jamaica": "CONCACAF",
+    "Panama": "CONCACAF", "El Salvador": "CONCACAF", "Guatemala": "CONCACAF",
+    "Trinidad and Tobago": "CONCACAF", "USA": "CONCACAF",
+
+    # CAF
+    "Senegal": "CAF", "Marruecos": "CAF", "Nigeria": "CAF",
+    "Egipto": "CAF", "Costa de Marfil": "CAF", "Ghana": "CAF",
+    "Camerún": "CAF", "Mali": "CAF", "Argelia": "CAF", "Túnez": "CAF",
+    "Sudáfrica": "CAF", "Congo": "CAF",
+    "Republica Democratica del Congo": "CAF",
+    "República Democrática del Congo": "CAF",
+    "RD Congo": "CAF", "DR Congo": "CAF",
+    "DRC": "CAF",
+    "Senegal": "CAF", "Morocco": "CAF", "Nigeria": "CAF",
+    "Egypt": "CAF", "Ivory Coast": "CAF", "Ghana": "CAF",
+    "Cameroon": "CAF", "Mali": "CAF", "Algeria": "CAF", "Tunisia": "CAF",
+    "South Africa": "CAF", "Congo": "CAF",
+    "Democratic Republic of the Congo": "CAF",
+
+    # AFC
+    "Japón": "AFC", "Corea del Sur": "AFC", "Arabia Saudita": "AFC",
+    "Irán": "AFC", "Australia": "AFC", "Qatar": "AFC",
+    "China": "AFC", "Irak": "AFC", "Emiratos Árabes": "AFC",
+    "Uzbekistán": "AFC",
+    "Japan": "AFC", "South Korea": "AFC", "Saudi Arabia": "AFC",
+    "Iran": "AFC", "Australia": "AFC", "Qatar": "AFC",
+    "China": "AFC", "Iraq": "AFC", "United Arab Emirates": "AFC",
+    "Uzbekistan": "AFC",
+}
+
 class TeamProfile:
     def __init__(
         self,
@@ -15,7 +93,8 @@ class TeamProfile:
         wc_form: Dict[str, Any],
         corners_lambda: float,
         cards_lambda: float,
-        effective_weight_matches: float
+        effective_weight_matches: float,
+        data_warnings: Optional[List[str]] = None
     ):
         self.team_name = team_name
         self.lambda_attack = lambda_attack
@@ -25,6 +104,7 @@ class TeamProfile:
         self.corners_lambda = corners_lambda
         self.cards_lambda = cards_lambda
         self.effective_weight_matches = effective_weight_matches
+        self.data_warnings = data_warnings or []
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -35,7 +115,8 @@ class TeamProfile:
             "wc_form": self.wc_form,
             "corners_lambda": self.corners_lambda,
             "cards_lambda": self.cards_lambda,
-            "effective_weight_matches": self.effective_weight_matches
+            "effective_weight_matches": self.effective_weight_matches,
+            "data_warnings": self.data_warnings
         }
 
 class MatchFeatureBuilder:
@@ -109,6 +190,9 @@ class MatchFeatureBuilder:
     ) -> TeamProfile:
         ref_date = self._parse_date(match_date)
         
+        # Accumulate warnings for data quality reporting
+        data_warnings = []
+        
         # 1. Fetch matches
         wc_matches = []
         if include_wc_matches:
@@ -119,13 +203,17 @@ class MatchFeatureBuilder:
                     if m.get("home_team") == team_name or m.get("away_team") == team_name
                 ]
             except Exception as e:
-                logger.warning(f"Error fetching WC matches for profile {team_name}: {e}")
+                msg = f"API fetch failed for '{team_name}' (WC fixtures): {type(e).__name__}: {e}"
+                logger.warning(msg)
+                data_warnings.append(msg)
 
         external_matches = []
         try:
             external_matches = self.api.get_team_last_matches(team_name, n=10)
         except Exception as e:
-            logger.warning(f"Error fetching external matches for profile {team_name}: {e}")
+            msg = f"API fetch failed for '{team_name}' (external matches): {type(e).__name__}: {e}"
+            logger.warning(msg)
+            data_warnings.append(msg)
 
         # Combine
         all_matches = []
@@ -137,33 +225,41 @@ class MatchFeatureBuilder:
             all_matches.append(m)
 
         # 2. Process metrics
-        # If no matches found at all, we use defaults
+        # If no matches found at all, use confederation-based prior
         if not all_matches:
-            logger.warning(f"No match history found for team: {team_name}. Using fallback profile.")
+            confederation = TEAM_CONFEDERATION.get(team_name, "UNKNOWN")
+            prior_attack, prior_defense = CONFEDERATION_PRIORS[confederation]
+            logger.warning(
+                f"No match history for '{team_name}'. "
+                f"Using confederation prior: {confederation} "
+                f"(λ_att={prior_attack}, λ_def={prior_defense})"
+            )
             return TeamProfile(
                 team_name=team_name,
-                lambda_attack=1.35,
-                lambda_defense=1.0,
+                lambda_attack=prior_attack,
+                lambda_defense=prior_defense,
                 recent_form={
-                    "record": "W0 D0 L0",
-                    "goals_scored_avg": 1.2,
-                    "goals_conceded_avg": 1.2,
+                    "record": "N/A",
+                    "goals_scored_avg": prior_attack * 1.35,
+                    "goals_conceded_avg": prior_defense * 1.35,
                     "btts_rate": 0.5,
                     "corners_avg": 5.0,
                     "cards_avg": 2.0,
                     "clean_sheets": 0,
-                    "form": "DDDDD"
+                    "form": "?????",
+                    "data_source": f"confederation_prior_{confederation}"
                 },
                 wc_form={
                     "played": 0,
-                    "record": "W0 D0 L0",
+                    "record": "N/A",
                     "goals_scored": 0,
                     "goals_conceded": 0,
                     "matches": []
                 },
                 corners_lambda=5.0,
                 cards_lambda=2.0,
-                effective_weight_matches=0
+                effective_weight_matches=0.0,
+                data_warnings=data_warnings
             )
 
         # Decay & Boost weights
@@ -325,5 +421,6 @@ class MatchFeatureBuilder:
             wc_form=wc_form_dict,
             corners_lambda=corners_lambda,
             cards_lambda=cards_lambda,
-            effective_weight_matches=effective_weight
+            effective_weight_matches=effective_weight,
+            data_warnings=data_warnings
         )

@@ -156,10 +156,18 @@ class FootballAPIClient:
         logger.warning("All live API sources failed to retrieve World Cup fixtures. Returning empty list.")
         return []
 
+    def _normalize_team_name(self, team_name: str) -> str:
+        """Normalize team name using aliases mapping."""
+        aliases = self.mappings.get("aliases", {})
+        return aliases.get(team_name, team_name)
+
     def get_team_last_matches(self, team_name: str, n: int = 10, exclude_competition: str = "World Cup") -> List[Dict[str, Any]]:
         """Gets last N matches outside of World Cup for the given team."""
+        # Normalize team name using aliases
+        normalized_name = self._normalize_team_name(team_name)
+        
         if self.source == "api_football" or (self.source == "auto" and self.api_football_key):
-            team_id = self.resolve_team_id(team_name, "api_football")
+            team_id = self.resolve_team_id(normalized_name, "api_football")
             if team_id:
                 try:
                     headers = {"x-apisports-key": self.api_football_key}
@@ -173,7 +181,7 @@ class FootballAPIClient:
                     logger.warning(f"API-Football failed for team {team_name} matches: {e}")
 
         if self.source == "football_data" or self.source == "auto":
-            team_id = self.resolve_team_id(team_name, "football_data")
+            team_id = self.resolve_team_id(normalized_name, "football_data")
             if team_id:
                 try:
                     headers = {"X-Auth-Token": self.football_data_token} if self.football_data_token else {}
