@@ -40,9 +40,9 @@ def derive_1x2(matrix: np.ndarray) -> Dict[str, float]:
     Returns:
         Dict with 'home', 'draw', 'away' probabilities summing to 1.
     """
-    p_home = float(np.sum(np.tril(matrix, k=-1)))
+    p_home = float(np.sum(np.tril(matrix, k=-1)))  # i > j → home gana (abajo diagonal)
     p_draw = float(np.sum(np.diag(matrix)))
-    p_away = float(np.sum(np.triu(matrix, k=1)))
+    p_away = float(np.sum(np.triu(matrix, k=1)))   # j > i → away gana (arriba diagonal)
 
     total = p_home + p_draw + p_away
     if total <= 0:

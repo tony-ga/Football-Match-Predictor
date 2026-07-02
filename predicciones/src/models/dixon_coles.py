@@ -21,6 +21,7 @@ from typing import Dict, Optional, Tuple, Any
 
 import numpy as np
 from scipy.optimize import minimize
+from scipy.special import gammaln
 from scipy.stats import poisson
 
 logger = logging.getLogger(__name__)
@@ -155,22 +156,14 @@ def dc_log_likelihood(
         ag = int(away_goals[k])
 
         log_p = (
-            hg * np.log(lambda_h) - lambda_h - _log_factorial(hg) +
-            ag * np.log(lambda_a) - lambda_a - _log_factorial(ag) +
+            hg * np.log(lambda_h) - lambda_h - gammaln(hg + 1) +
+            ag * np.log(lambda_a) - lambda_a - gammaln(ag + 1) +
             np.log(max(_dc_tau(hg, ag, lambda_h, lambda_a, rho), 1e-10))
         )
 
         total_ll += weights[k] * log_p
 
     return -total_ll  # negative because we minimize
-
-
-def _log_factorial(n: int) -> float:
-    """Compute log(n!) using Stirling for large n."""
-    if n <= 20:
-        return float(np.sum(np.log(np.arange(1, n + 1)))) if n > 0 else 0.0
-    # Stirling approximation
-    return n * np.log(n) - n + 0.5 * np.log(2 * np.pi * n)
 
 
 def temporal_weights(

@@ -1,42 +1,197 @@
-```
-# Python
-__pycache__/
+```python
+# Compiled and build artifacts
 *.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-.ENV
-.env
-*.env
-.env.*
-.venv/
-venv/
-ENV/
-.env.bak
-.python-version
-
-# Build and distribution artifacts
-build/
-dist/
-*.egg
-*.egg-info/
+__pycache__/
+*.o
+*.obj
 *.so
-.libs/
+*.dylib
+*.dll
+*.exe
+*.class
+*.out
+*.a
+*.lib
 
-# Testing
+# Dependencies
+.venv/
+venv/
+env/
+.env
+.env.local
+.env.*
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build directories
+dist/
+build/
+target/
+*.egg-info/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.~lock~
+
+# Coverage reports
 .coverage
 coverage/
 htmlcov/
-.noserc
-.pytest_cache/
-.tox/
 
-# Linting and type checking
+# IDE specific
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+
+# Python specific
+*.pyc
+__pycache__/
+.pytest_cache/
 .mypy_cache/
 .hypothesis/
+*.pot
+*.pyo
+*.pyd
+*.so
+.Python
+*.sqlite
+*.sqlite3
+*.db
+
+# Testing
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+coverage.lcov
+.coverage.*
+
+# Translations
+*.mo
+*.pot
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask
+instance/
+.webassets-cache
+
+# Scrapy
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# pytype
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+.idea/
+
+# Visual Studio Code
+.vscode/
+
+# Temporary folders for file browsing
+*/tmp/*
+*/*/tmp/*
 
 # OS generated files
 .DS_Store
@@ -46,4 +201,17 @@ htmlcov/
 .Trashes
 ehthumbs.db
 Thumbs.db
+Icon?
 ```
+
+Wait, let me reconsider. Looking at the modified files, they are all Python source files in a data science/machine learning project. There are no build artifacts, dependency directories, or temporary files mentioned in the changes. The files being modified are:
+
+- `predicciones/src/data/feature_builder.py` - Python source
+- `predicciones/src/models/dixon_coles.py` - Python source  
+- `predicciones/src/models/lambda_recalibration.py` - Python source
+- `predicciones/src/models/market_derivation.py` - Python source
+- `predicciones/src/pipeline/predict.py` - Python source
+
+According to rule #6, if the change list contains ONLY source files and NO build artifacts, dependencies, or temp files, I should output an EMPTY .gitignore.
+
+(empty)
