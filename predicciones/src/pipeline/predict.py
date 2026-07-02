@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Dict, Any, Tuple
 
 from ..utils.config_loader import config
-from ..data.api_client import FootballAPIClient
 from ..data.feature_builder import MatchFeatureBuilder
 from ..models.dixon_coles import DixonColesModel
 from ..models.lambda_recalibration import LambdaRecalibrator
@@ -19,56 +18,31 @@ def predict_match_pipeline(
     away_team: str,
     match_date: str = None,
     neutral_venue: bool = False,
-    refresh_data: bool = False,
-    api_source: str = "auto"
+    **kwargs  # absorbe refresh_data, api_source, etc. para compatibilidad
 ) -> Dict[str, Any]:
     """
-    Unified football prediction pipeline with real-time API fetching,
-    decay-weighted feature building, Dixon-Coles prediction, market calibration,
-    sanity checks, and enriched JSON output.
+    Unified football prediction pipeline using static WC2026 ratings.
+    No external API calls - all data comes from ratings_wc2026.json.
     """
     if match_date is None:
         match_date = datetime.today().strftime("%Y-%m-%d")
 
-    # Step 1: Initialize API Client & Feature Builder
-    # If refresh_data is True, we can clear cache or ignore it.
-    api_key = os.getenv("API_FOOTBALL_KEY") or config.get("api_data_fetching", {}).get("api_football_key")
-    api_client = FootballAPIClient(api_key=api_key, source=api_source)
-    
-    if refresh_data:
-        # Clear in-memory cache
-        api_client.cache.clear()
-        logger.info("Cleared API client cache per request.")
+    # Step 1: Initialize Feature Builder (no API client needed)
+    builder = MatchFeatureBuilder()
 
-    builder = MatchFeatureBuilder(api_client)
-
-    # Step 2: Build Team Profiles (Data Fetch & Feature Building)
+    # Step 2: Build Team Profiles from static ratings
     logger.info(f"Building profile for {home_team}...")
     home_profile = builder.build_team_profile(home_team, match_date, include_wc_matches=True)
     
     logger.info(f"Building profile for {away_team}...")
     away_profile = builder.build_team_profile(away_team, match_date, include_wc_matches=True)
 
-    # Extract source info for freshness metadata
-    home_source = "local_dataset"
-    if home_profile.effective_weight_matches > 0:
-        # Infer source from profile matches
-        # We checked api_football first
-        home_source = "api_football" if api_client.api_football_key else "football_data"
-
-    away_source = "local_dataset"
-    if away_profile.effective_weight_matches > 0:
-        away_source = "api_football" if api_client.api_football_key else "football_data"
-
     # Step 3: Compute raw lambdas using profile values
-    # We construct mock feature dictionaries representing the profiles
-    # to fit into the existing DixonColesModel heuristic estimation.
-    
     home_features = {
         'nombre': home_team,
         'attack_rating': home_profile.lambda_attack,
         'defense_rating': home_profile.lambda_defense,
-        'form_factor': 1.0, # Handled by weighted goal averages in profile
+        'form_factor': 1.0,
         'ranking_factor': 1.0,
         'h2h_factor': 1.0,
         'squad_multiplier': 1.0,
@@ -90,7 +64,6 @@ def predict_match_pipeline(
 
     # Step 4: Dixon-Coles model & Lambda Recalibration
     dc_model = DixonColesModel(config=config)
-    # Override model's max goals to 6 per user request
     dc_model.max_goals = 6
     
     raw_lambda_h, raw_lambda_a = dc_model.predict_lambdas(home_features, away_features)
@@ -106,7 +79,7 @@ def predict_match_pipeline(
     # Step 5: Derive markets
     markets = derive_all_markets(matrix, lambda_h, lambda_a, config)
 
-    # Step 6: Calibrate markets (Before Sanity Checks, per user spec)
+    # Step 6: Calibrate markets
     calibrator_mgr = CalibrationManager(config=config)
     try:
         calibrator_mgr.load_from_config()
@@ -119,16 +92,13 @@ def predict_match_pipeline(
     final_markets = run_sanity_checks(calibrated_markets, lambda_h, lambda_a, config)
 
     # Construct output JSON with enriched team context
-    home_data_quality = "real" if home_profile.effective_weight_matches > 0 else "prior_only"
-    away_data_quality = "real" if away_profile.effective_weight_matches > 0 else "prior_only"
-    
     response = {
         "match": f"{home_team} vs {away_team}",
         "predictions": final_markets,
         "team_context": {
             "home": {
                 "team": home_team,
-                "data_source": home_source,
+                "data_source": "ratings_wc2026_static",
                 "last_10_external": home_profile.recent_form,
                 "wc_2026_matches": home_profile.wc_form,
                 "lambda_attack": round(home_profile.lambda_attack, 3),
@@ -140,7 +110,7 @@ def predict_match_pipeline(
             },
             "away": {
                 "team": away_team,
-                "data_source": away_source,
+                "data_source": "ratings_wc2026_static",
                 "last_10_external": away_profile.recent_form,
                 "wc_2026_matches": away_profile.wc_form,
                 "lambda_attack": round(away_profile.lambda_attack, 3),
@@ -153,10 +123,10 @@ def predict_match_pipeline(
         },
         "data_freshness": {
             "fetched_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "warnings": home_profile.data_warnings + away_profile.data_warnings,
-            "home_data_quality": home_data_quality,
-            "away_data_quality": away_data_quality,
-            "cache_hit": False
+            "data_source": "ratings_wc2026_static",
+            "home_fifa_rank": home_profile.recent_form.get("fifa_rank", "N/A"),
+            "away_fifa_rank": away_profile.recent_form.get("fifa_rank", "N/A"),
+            "warnings": home_profile.data_warnings + away_profile.data_warnings
         }
     }
     return response
