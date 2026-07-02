@@ -119,6 +119,9 @@ def predict_match_pipeline(
     final_markets = run_sanity_checks(calibrated_markets, lambda_h, lambda_a, config)
 
     # Construct output JSON with enriched team context
+    home_data_quality = "real" if home_profile.effective_weight_matches > 0 else "prior_only"
+    away_data_quality = "real" if away_profile.effective_weight_matches > 0 else "prior_only"
+    
     response = {
         "match": f"{home_team} vs {away_team}",
         "predictions": final_markets,
@@ -132,7 +135,8 @@ def predict_match_pipeline(
                 "lambda_defense": round(home_profile.lambda_defense, 3),
                 "corners_lambda": round(home_profile.corners_lambda, 3),
                 "cards_lambda": round(home_profile.cards_lambda, 3),
-                "effective_weight_matches": home_profile.effective_weight_matches
+                "effective_weight_matches": home_profile.effective_weight_matches,
+                "data_warnings": home_profile.data_warnings
             },
             "away": {
                 "team": away_team,
@@ -143,13 +147,16 @@ def predict_match_pipeline(
                 "lambda_defense": round(away_profile.lambda_defense, 3),
                 "corners_lambda": round(away_profile.corners_lambda, 3),
                 "cards_lambda": round(away_profile.cards_lambda, 3),
-                "effective_weight_matches": away_profile.effective_weight_matches
+                "effective_weight_matches": away_profile.effective_weight_matches,
+                "data_warnings": away_profile.data_warnings
             }
         },
         "data_freshness": {
             "fetched_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "wc_fixtures_last_update": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "cache_hit": False # We set it based on client caches later if desired
+            "warnings": home_profile.data_warnings + away_profile.data_warnings,
+            "home_data_quality": home_data_quality,
+            "away_data_quality": away_data_quality,
+            "cache_hit": False
         }
     }
     return response
