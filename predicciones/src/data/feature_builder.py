@@ -15,7 +15,7 @@ class TeamProfile:
         wc_form: Dict[str, Any],
         corners_lambda: float,
         cards_lambda: float,
-        effective_weight_matches: int
+        effective_weight_matches: float
     ):
         self.team_name = team_name
         self.lambda_attack = lambda_attack
@@ -314,6 +314,9 @@ class MatchFeatureBuilder:
         lambda_attack = max(0.1, avg_scored / LEAGUE_AVG_GOALS)
         lambda_defense = max(0.1, avg_conceded / LEAGUE_AVG_GOALS)
 
+        # Calculate effective weight (sum of weights, not just count)
+        effective_weight = sum(m.get("weight", 1.0) for m in boosted)
+
         return TeamProfile(
             team_name=team_name,
             lambda_attack=lambda_attack,
@@ -322,5 +325,5 @@ class MatchFeatureBuilder:
             wc_form=wc_form_dict,
             corners_lambda=corners_lambda,
             cards_lambda=cards_lambda,
-            effective_weight_matches=len(all_matches)
+            effective_weight_matches=effective_weight
         )

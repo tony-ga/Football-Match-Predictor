@@ -130,6 +130,8 @@ def predict_match_pipeline(
                 "wc_2026_matches": home_profile.wc_form,
                 "lambda_attack": round(home_profile.lambda_attack, 3),
                 "lambda_defense": round(home_profile.lambda_defense, 3),
+                "corners_lambda": round(home_profile.corners_lambda, 3),
+                "cards_lambda": round(home_profile.cards_lambda, 3),
                 "effective_weight_matches": home_profile.effective_weight_matches
             },
             "away": {
@@ -139,6 +141,8 @@ def predict_match_pipeline(
                 "wc_2026_matches": away_profile.wc_form,
                 "lambda_attack": round(away_profile.lambda_attack, 3),
                 "lambda_defense": round(away_profile.lambda_defense, 3),
+                "corners_lambda": round(away_profile.corners_lambda, 3),
+                "cards_lambda": round(away_profile.cards_lambda, 3),
                 "effective_weight_matches": away_profile.effective_weight_matches
             }
         },

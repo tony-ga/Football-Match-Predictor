@@ -13,7 +13,7 @@ from typing import Dict, Any, Tuple, Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Ridge
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,8 @@ class LambdaRecalibrator:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.recal_config = self.config.get('lambda_recalibration', {})
-        self.model_home: Optional[LinearRegression] = None
-        self.model_away: Optional[LinearRegression] = None
+        self.model_home: Optional[Ridge] = None
+        self.model_away: Optional[Ridge] = None
         self.is_fitted = False
         
         # Fallback heuristic parameters
@@ -41,26 +41,24 @@ class LambdaRecalibrator:
         Requires dataframe with columns:
         'raw_lambda_h', 'raw_lambda_a', 'home_score', 'away_score'
         """
-        # Feature matrix: [raw_lambda_h, raw_lambda_a, total_raw_lambda]
+        # Feature matrix: [raw_lambda_h, raw_lambda_a]
         X_h = np.column_stack([
             df['raw_lambda_h'].values,
             df['raw_lambda_a'].values,
-            (df['raw_lambda_h'] + df['raw_lambda_a']).values
         ])
         
         X_a = np.column_stack([
             df['raw_lambda_a'].values,
             df['raw_lambda_h'].values,
-            (df['raw_lambda_h'] + df['raw_lambda_a']).values
         ])
 
         y_h = df['home_score'].values
         y_a = df['away_score'].values
 
-        self.model_home = LinearRegression()
+        self.model_home = Ridge(alpha=1.0)
         self.model_home.fit(X_h, y_h)
 
-        self.model_away = LinearRegression()
+        self.model_away = Ridge(alpha=1.0)
         self.model_away.fit(X_a, y_a)
 
         self.is_fitted = True
@@ -74,8 +72,8 @@ class LambdaRecalibrator:
         """
         if self.is_fitted and self.model_home is not None and self.model_away is not None:
             # Predict using trained regression
-            X_h = np.array([[lambda_h, lambda_a, lambda_h + lambda_a]])
-            X_a = np.array([[lambda_a, lambda_h, lambda_h + lambda_a]])
+            X_h = np.array([[lambda_h, lambda_a]])
+            X_a = np.array([[lambda_a, lambda_h]])
             
             adj_h = float(self.model_home.predict(X_h)[0])
             adj_a = float(self.model_away.predict(X_a)[0])
