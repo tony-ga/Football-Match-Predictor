@@ -6,7 +6,7 @@ La arquitectura es de dos capas:
 1. **Motor Base:** Modelo Dixon-Coles con decaimiento temporal y corrección de empates, que estima $\lambda_{home}$ y $\lambda_{away}$ basándose en factores ofensivos, defensivos, contextuales y de calidad de plantilla. A partir de esto, se genera una matriz de marcadores (scorelines).
 2. **Capa de Calibración:** Modelos independientes por mercado (Isotonic Regression o Platt Scaling) para ajustar probabilidades base hacia probabilidades del mundo real.
 
-## 📁 Estructura del Proyecto
+## Estructura del Proyecto
 
 ```text
 predicciones/
@@ -44,7 +44,7 @@ predicciones/
    pip install -r requirements.txt
    ```
 
-## 🚀 Uso Rápido (Predicción)
+## Uso (Predicción)
 
 Puedes predecir el resultado de un partido y todos sus mercados usando el script CLI.
 
@@ -61,7 +61,7 @@ El script mostrará:
 2. Los mercados de 1X2, Over/Under, Both Teams To Score (BTTS), Totales de Equipo, Porterías a Cero y Marcadores Correctos.
 3. Avisos del *Sanity Checker* si detecta incoherencias.
 
-## 📡 Levantando la API
+## Levantando la API
 
 Para integrar el modelo con otros sistemas o dashboards, puedes usar la API basada en `FastAPI`:
 
@@ -71,7 +71,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 
 Prueba la API enviando un `POST` a `/predict` con el contenido del JSON del partido, o visita la documentación interactiva en `http://localhost:8000/docs`.
 
-## 🧠 Flujo y Módulos Core
+##  Flujo y Módulos Core
 
 1. **Ingesta y Validación (`src/ingestion`):** Usa Pydantic v2 para validar estrictamente que el JSON cumpla con todos los factores tácticos, colectivos, de contexto y la lista de jugadores. Rellena los datos ausentes con defaults estadísticos.
 2. **Feature Engineering (`src/features`):** 
