@@ -31,7 +31,7 @@ predicciones/
 └── README.md              # Este archivo
 ```
 
-## 🛠️ Instalación
+## Instalación
 
 1. Clona el repositorio y ubícate en la carpeta del proyecto.
 2. Crea un entorno virtual (opcional pero recomendado):
