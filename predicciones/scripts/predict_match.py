@@ -161,6 +161,23 @@ def run_prediction_from_input(
             "venue": espn_context.get("venue"),
             "source": espn_context.get("source", "espn"),
         }
+        
+        # Include market predictions if requested
+        if espn_context.get("include_markets"):
+            from src.pipeline.predict_markets import predict_markets_for_match
+            
+            console.print("\n[bold blue]Computing additional market predictions...[/bold blue]")
+            try:
+                markets_data = predict_markets_for_match(
+                    home_team=home_team,
+                    away_team=away_team,
+                    event_id=espn_context.get("event_id"),
+                )
+                response["markets"] = markets_data
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not compute market predictions: {e}[/yellow]")
+                logger.warning(f"Market prediction failed: {e}")
+                response["markets"] = {"error": str(e)}
     
     console.print("\n[bold green]=== FINAL PREDICTION OUTPUT ===[/bold green]")
     
@@ -182,6 +199,13 @@ def run_prediction_from_input(
     
     console.print("\n[bold]Predictions:[/bold]")
     pprint(display_response.get("predictions", {}))
+    
+    # Print market predictions if available
+    if espn_context and espn_context.get("include_markets"):
+        markets = response.get("markets", {})
+        if markets and "error" not in markets:
+            console.print("\n[bold]Market Predictions:[/bold]")
+            pprint(markets)
     
     # Print team context summary
     team_context = response.get("team_context", {})
@@ -290,6 +314,7 @@ def mode_upcoming(args) -> None:
         "status": selected_match.status,
         "venue": selected_match.venue,
         "source": "espn_scoreboard",
+        "include_markets": getattr(args, 'include_markets', False),
     }
     
     run_prediction_from_input(match_input, "upcoming", espn_context)
@@ -316,6 +341,7 @@ def mode_match(args) -> None:
     espn_context = {
         "event_id": args.event_id,
         "source": "espn_summary",
+        "include_markets": getattr(args, 'include_markets', False),
     }
     
     run_prediction_from_input(match_input, "match", espn_context)
@@ -346,7 +372,11 @@ def mode_teams(args) -> None:
     
     console.print(f"[green]✓ Teams normalized: {match_input.metadata.home_team} vs {match_input.metadata.away_team}[/green]")
     
-    run_prediction_from_input(match_input, "teams")
+    espn_context = {
+        "include_markets": getattr(args, 'include_markets', False),
+    }
+    
+    run_prediction_from_input(match_input, "teams", espn_context)
 
 
 def mode_json(args) -> None:
@@ -423,6 +453,11 @@ Examples:
     parser.add_argument("--competition", type=str, help="Competition name (teams mode)")
     parser.add_argument("--stage", type=str, help="Match stage (teams mode)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--include-markets",
+        action="store_true",
+        help="Include additional market predictions (corners, cards, shots, player props)"
+    )
     
     args = parser.parse_args()
     
