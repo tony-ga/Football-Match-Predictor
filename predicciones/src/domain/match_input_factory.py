@@ -7,7 +7,7 @@ compatible with the prediction pipeline.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional
 
 from ..ingestion.schemas import (
@@ -125,7 +125,7 @@ class MatchInputFactory:
             competition=summary.get("league", {}).get("name", "FIFA World Cup"),
             competition_type=CompetitionType.WORLD_CUP,
             stage=stage,
-            date=summary.get("date", datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")),
+            date=summary.get("date", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
             neutral_venue=bool(neutral_venue),
             venue=venue,
         )
@@ -161,7 +161,7 @@ class MatchInputFactory:
             competition=match.competition,
             competition_type=CompetitionType.WORLD_CUP,
             stage=stage,
-            date=match.date[:10] if match.date else datetime.utcnow().strftime("%Y-%m-%d"),
+            date=match.date[:10] if match.date else datetime.now(UTC).strftime("%Y-%m-%d"),
             neutral_venue=bool(match.neutral_venue) if match.neutral_venue is not None else False,
             venue=match.venue,
         )
@@ -210,7 +210,7 @@ class MatchInputFactory:
             competition=competition or "Friendly",
             competition_type=CompetitionType.FRIENDLY,
             stage=self._parse_stage_string(stage) if stage else MatchStage.REGULAR,
-            date=match_date or datetime.utcnow().strftime("%Y-%m-%d"),
+            date=match_date or datetime.now(UTC).strftime("%Y-%m-%d"),
             neutral_venue=False,
         )
         

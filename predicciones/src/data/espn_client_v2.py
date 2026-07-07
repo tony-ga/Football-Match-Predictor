@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +17,28 @@ import requests
 from ..domain.exceptions import EspnApiError
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_utc(dt: datetime) -> datetime:
+    """
+    Ensure a datetime is timezone-aware and in UTC.
+    
+    Args:
+        dt: A datetime object (naive or aware)
+        
+    Returns:
+        A timezone-aware datetime in UTC
+        
+    Behavior:
+        - If dt is naive (tzinfo is None), assume it's UTC and attach tzinfo=UTC
+        - If dt is aware, convert it to UTC using astimezone(UTC)
+    """
+    if dt.tzinfo is None:
+        # Naive datetime: assume UTC
+        return dt.replace(tzinfo=UTC)
+    else:
+        # Aware datetime: convert to UTC
+        return dt.astimezone(UTC)
 
 
 class EspnCache:
@@ -53,7 +75,10 @@ class EspnCache:
             
             # Check TTL
             cached_at = datetime.fromisoformat(data["_cached_at"])
-            if datetime.utcnow() - cached_at > timedelta(seconds=self.ttl_seconds):
+            # Normalize to UTC for comparison (handles both naive and aware timestamps)
+            cached_at_utc = ensure_utc(cached_at)
+            now_utc = datetime.now(UTC)
+            if now_utc - cached_at_utc > timedelta(seconds=self.ttl_seconds):
                 # Expired
                 cache_path.unlink(missing_ok=True)
                 return None
@@ -69,7 +94,7 @@ class EspnCache:
         
         try:
             data = {
-                "_cached_at": datetime.utcnow().isoformat(),
+                "_cached_at": datetime.now(UTC).isoformat(),
                 "response": response
             }
             with open(cache_path, "w", encoding="utf-8") as f:

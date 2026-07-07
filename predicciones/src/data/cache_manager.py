@@ -9,11 +9,33 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, UTC, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_utc(dt: datetime) -> datetime:
+    """
+    Ensure a datetime is timezone-aware and in UTC.
+    
+    Args:
+        dt: A datetime object (naive or aware)
+        
+    Returns:
+        A timezone-aware datetime in UTC
+        
+    Behavior:
+        - If dt is naive (tzinfo is None), assume it's UTC and attach tzinfo=UTC
+        - If dt is aware, convert it to UTC using astimezone(UTC)
+    """
+    if dt.tzinfo is None:
+        # Naive datetime: assume UTC
+        return dt.replace(tzinfo=UTC)
+    else:
+        # Aware datetime: convert to UTC
+        return dt.astimezone(UTC)
 
 
 class EspnCacheManager:
@@ -77,7 +99,10 @@ class EspnCacheManager:
             
             # Check expiration
             cached_at = datetime.fromisoformat(cached_data.get("_cached_at", ""))
-            if datetime.now(UTC) - cached_at.replace(tzinfo=None if cached_at.tzinfo is None else UTC) > timedelta(hours=ttl_hours):
+            # Normalize cached_at to UTC (handles both naive and aware timestamps)
+            cached_at_utc = ensure_utc(cached_at)
+            now_utc = datetime.now(UTC)
+            if now_utc - cached_at_utc > timedelta(hours=ttl_hours):
                 logger.debug(f"Cache expired for {endpoint}")
                 return None
             
@@ -213,7 +238,9 @@ class EspnCacheManager:
                     cached_data = json.load(f)
                 
                 cached_at = datetime.fromisoformat(cached_data.get("_cached_at", ""))
-                if cached_at.replace(tzinfo=None if cached_at.tzinfo is None else UTC) < cutoff:
+                # Normalize cached_at to UTC (handles both naive and aware timestamps)
+                cached_at_utc = ensure_utc(cached_at)
+                if cached_at_utc < cutoff:
                     cache_file.unlink()
                     cleared += 1
             except (json.JSONDecodeError, KeyError, ValueError):

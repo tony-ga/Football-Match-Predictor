@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Dict, Any, Tuple
 
 from ..utils.config_loader import config
@@ -291,7 +291,7 @@ def predict_match_pipeline(
             }
         },
         "data_freshness": {
-            "fetched_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "fetched_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "source": overall_source,
             "home_data_quality": "high" if len(home_profile.data_warnings) == 0 else "medium" if len(home_profile.data_warnings) <= 2 else "low",
             "away_data_quality": "high" if len(away_profile.data_warnings) == 0 else "medium" if len(away_profile.data_warnings) <= 2 else "low",
