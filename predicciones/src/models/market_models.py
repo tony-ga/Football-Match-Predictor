@@ -5,19 +5,26 @@ Implements Poisson and Negative Binomial models for:
 - Corners
 - Cards  
 - Shots on target
-- Player props (heuristic/hierarchical)
+- Player props (using explicit position-based lambda calculation)
 
 Key improvements:
 - Bayesian regularization with global priors
 - Coupling with xG/possession model
 - Consistent more_* derivation from team distributions
 - Proper probability normalization for player props
+- Position-based player lambda with hierarchical priors
 """
 from __future__ import annotations
 
 import logging
 import math
 from typing import Any, Dict, List, Optional, Tuple
+
+from .player_lambda import (
+    compute_all_player_lambdas,
+    validate_player_lambdas,
+    POSITION_WEIGHTS as PLAYER_POSITION_WEIGHTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -554,16 +561,17 @@ class ShotsModel:
 
 class PlayerPropsModel:
     """
-    Heuristic/hierarchical model for player props with proper probability normalization.
+    Model for player props using explicit position-based lambda calculation.
     
-    Key improvements:
-    - Anytime scorer probabilities are capped by team lambda (sum <= λ_team)
-    - First scorer probabilities sum to <= 1.0 with explicit "no goal" probability
-    - Proper allocation of team xG to individual players based on shot share, role
+    Uses the player_lambda module to compute individual player lambdas with:
+    - Position hierarchy (forwards > wingers > AM > CM > FB > CB > GK)
+    - Bayesian shrinkage toward position-specific priors for small samples
+    - Hard caps by position to prevent outliers
+    - Team lambda normalization to keep sum of player lambdas reasonable
     
     Predicts:
-    - Anytime scorer (normalized across team)
-    - First scorer (normalized distribution)
+    - Anytime scorer (normalized across team, sum <= λ_team)
+    - First scorer (normalized distribution, sum + P(no goal) = 1)
     - Player SOT over/under
     - Player assists over/under
     """
@@ -584,12 +592,12 @@ class PlayerPropsModel:
         """
         Predict anytime scorer probabilities for multiple players with proper normalization.
         
-        Uses a Poisson-based model where each player has an individual lambda (goal rate).
-        The sum of all player lambdas ≈ team_xg, with realistic distribution based on:
+        Uses the player_lambda module to compute individual player lambdas based on:
+        - Position hierarchy (CF > AM/WM > CM > FB > CB > GK)
         - Recent goals (strongest signal)
         - Shots per 90
-        - Position hierarchy (CF > AM/WM > CM > FB > CB > GK)
-        - Expected minutes
+        - Minutes/playing time
+        - Small-sample regularization
         
         Probability is computed as P_i = 1 - exp(-lambda_i), then scaled to ensure
         sum(P_i) stays reasonable relative to team_xg.
@@ -605,130 +613,27 @@ class PlayerPropsModel:
         if not players_data:
             return []
         
-        # Position hierarchy weights (higher = more offensive role)
-        POSITION_WEIGHTS = {
-            "forward": 1.0, "striker": 1.0, "attacker": 1.0, "delantero": 1.0, "cf": 1.0,
-            "winger": 0.85, "extremo": 0.85, "am": 0.85, "mediapunta": 0.85,
-            "midfielder": 0.6, "volante": 0.6, "cm": 0.6, "cdm": 0.5,
-            "fullback": 0.35, "lateral": 0.35, "wingback": 0.4,
-            "defender": 0.25, "centreback": 0.2, "central": 0.2, "defensa": 0.25,
-            "goalkeeper": 0.02, "portero": 0.02, "arquero": 0.02,
-        }
+        # Use the new player_lambda module for computation
+        results = compute_all_player_lambdas(players_data, team_xg)
         
-        # Compute raw lambda scores for each player
-        player_lambdas = []
-        total_goals_recent = 0
-        total_weighted_score = 0
-        
-        for pdata in players_data:
-            goals = pdata.get("goals", 0) or 0
-            matches = pdata.get("matches_played", 1) or 1
-            shots = pdata.get("shots", 0) or 0
-            minutes = pdata.get("minutes", 0) or 0
-            position = pdata.get("position", "").lower()
-            is_starter = pdata.get("is_starter", False) or pdata.get("starts", 0) > 0
-            
-            total_goals_recent += goals
-        
-        # Avoid division by zero
-        if total_goals_recent == 0:
-            total_goals_recent = 0.1
-        
-        for pdata in players_data:
-            goals = pdata.get("goals", 0) or 0
-            matches = pdata.get("matches_played", 1) or 1
-            shots = pdata.get("shots", 0) or 0
-            minutes_raw = pdata.get("minutes", 0) or 0
-            starts = pdata.get("starts", 0) or 0
-            position = pdata.get("position", "").lower()
-            is_starter = pdata.get("is_starter", False) or starts > 0
-            
-            # FIX: Si minutes es None/0 en los datos, estimar basado en starts
-            # Un titular típico juega ~80-90 min, un suplente ~20-30 min
-            if minutes_raw <= 0:
-                # Estimación conservadora: 75 min por start, 25 min por sub appearance
-                subs = max(0, matches - starts)
-                minutes = starts * 75 + subs * 25
-            else:
-                minutes = minutes_raw
-            
-            # 1. Goals contribution (strongest factor) - share of team's recent goals
-            goal_share = goals / total_goals_recent if total_goals_recent > 0 else 1.0 / len(players_data)
-            
-            # 2. Shots per 90 - indicates involvement in attack
-            # Now uses estimated minutes if actual minutes unavailable
-            shots_per_90 = (shots / matches) * (90 / max(minutes, 1)) if minutes > 0 else 0
-            # Normalize to [0, 1] range (typical max ~12 shots/90 for very active players)
-            shot_factor = min(1.0, shots_per_90 / 10.0)
-            
-            # 3. Position weight from hierarchy (CRITICAL: enforce offensive hierarchy)
-            pos_weight = 0.5  # default
-            for key, val in POSITION_WEIGHTS.items():
-                if key in position:
-                    pos_weight = val
-                    break
-            
-            # 4. Minutes/starter factor - playing time expectation
-            # Starters get full weight, subs reduced
-            mins_factor = min(1.0, minutes / 90) if minutes > 0 else 0.3
-            starter_bonus = 1.0 if is_starter else 0.7
-            playing_time_factor = mins_factor * starter_bonus
-            
-            # Combine factors into raw lambda score
-            # Weighting: goals (55%), position (25%), shots (12%), playing time (8%)
-            # Increased goals weight, decreased shots (since data is sparse)
-            raw_lambda_score = (
-                0.55 * goal_share +
-                0.25 * pos_weight +
-                0.12 * shot_factor +
-                0.08 * playing_time_factor
-            )
-            
-            player_lambdas.append({
-                "player_name": pdata.get("player_name", "Unknown"),
-                "team": pdata.get("team", ""),
-                "raw_lambda_score": max(0.001, raw_lambda_score),
-                "position": position,
-                "goals_recent": goals,
-                "matches": matches,
-                "minutes": minutes,
-                "minutes_raw": minutes_raw,
-                "is_starter": is_starter,
-                "starts": starts,
-                "shots_per_90": shots_per_90,
+        # Convert to the expected output format
+        output = []
+        for r in results:
+            output.append({
+                "player_name": r.get("player_name", "Unknown"),
+                "team": r.get("team", ""),
+                "probability": r.get("anytime_prob", 0),  # Internal: float in [0,1]
+                "probability_pct": r.get("anytime_prob_pct", 0),  # Display: percentage
+                "lambda": r.get("lambda_final", 0),
+                "goals_recent": r.get("goals_recent", 0),
+                "matches_played": r.get("matches", 0),
+                "position": r.get("position_key", ""),
+                "minutes": r.get("minutes", 0),
+                "is_starter": r.get("is_starter", False),
+                "shots_per_90": r.get("shots_per_90", 0),
             })
         
-        # Normalize lambdas so sum(lambda_i) ≈ team_xg
-        total_raw_lambda = sum(p["raw_lambda_score"] for p in player_lambdas)
-        
-        results = []
-        for p in player_lambdas:
-            # Scale raw score to get player lambda
-            lambda_i = (p["raw_lambda_score"] / total_raw_lambda) * team_xg if total_raw_lambda > 0 else team_xg / len(player_lambdas)
-            
-            # Convert lambda to probability using Poisson: P(score ≥ 1) = 1 - exp(-lambda)
-            prob_anytime = 1.0 - math.exp(-lambda_i)
-            
-            # Store both lambda and probability (internally as float in [0,1])
-            # Also store percentage format for display
-            results.append({
-                "player_name": p["player_name"],
-                "team": p["team"],
-                "probability": round(prob_anytime, 4),  # Internal: float in [0,1]
-                "probability_pct": round(prob_anytime * 100, 2),  # Display: percentage
-                "lambda": round(lambda_i, 4),
-                "goals_recent": p["goals_recent"],
-                "matches_played": p["matches"],
-                "position": p["position"],
-                "minutes": p["minutes"],
-                "is_starter": p["is_starter"],
-                "shots_per_90": round(p["shots_per_90"], 2),
-            })
-        
-        # Sort by probability descending
-        results.sort(key=lambda x: x["probability"], reverse=True)
-        
-        return results
+        return output
     
     def predict_first_scorer_normalized(
         self,
