@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -77,7 +77,7 @@ class EspnCacheManager:
             
             # Check expiration
             cached_at = datetime.fromisoformat(cached_data.get("_cached_at", ""))
-            if datetime.utcnow() - cached_at > timedelta(hours=ttl_hours):
+            if datetime.now(UTC) - cached_at.replace(tzinfo=None if cached_at.tzinfo is None else UTC) > timedelta(hours=ttl_hours):
                 logger.debug(f"Cache expired for {endpoint}")
                 return None
             
@@ -107,7 +107,7 @@ class EspnCacheManager:
         cache_file = self.cache_dir / f"{cache_key}.json"
         
         cached_data = {
-            "_cached_at": datetime.utcnow().isoformat(),
+            "_cached_at": datetime.now(UTC).isoformat(),
             "_endpoint": endpoint,
             "_params": params,
             "data": data,
@@ -134,7 +134,7 @@ class EspnCacheManager:
         output_file = self.derived_dir / filename
         
         # Add timestamp
-        match_stats["_created_at"] = datetime.utcnow().isoformat()
+        match_stats["_created_at"] = datetime.now(UTC).isoformat()
         
         with open(output_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(match_stats) + "\n")
@@ -154,7 +154,7 @@ class EspnCacheManager:
         output_file = self.derived_dir / filename
         
         # Add timestamp
-        player_stats["_created_at"] = datetime.utcnow().isoformat()
+        player_stats["_created_at"] = datetime.now(UTC).isoformat()
         
         with open(output_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(player_stats) + "\n")
@@ -205,7 +205,7 @@ class EspnCacheManager:
             Number of files cleared
         """
         cleared = 0
-        cutoff = datetime.utcnow() - timedelta(hours=ttl_hours)
+        cutoff = datetime.now(UTC) - timedelta(hours=ttl_hours)
         
         for cache_file in self.cache_dir.glob("*.json"):
             try:
@@ -213,7 +213,7 @@ class EspnCacheManager:
                     cached_data = json.load(f)
                 
                 cached_at = datetime.fromisoformat(cached_data.get("_cached_at", ""))
-                if cached_at < cutoff:
+                if cached_at.replace(tzinfo=None if cached_at.tzinfo is None else UTC) < cutoff:
                     cache_file.unlink()
                     cleared += 1
             except (json.JSONDecodeError, KeyError, ValueError):
