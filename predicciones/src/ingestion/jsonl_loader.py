@@ -16,11 +16,30 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Import canonical path helpers
+from src.utils.config_paths import get_derived_dir, get_cache_dir
+
 logger = logging.getLogger(__name__)
 
 # Canonical path for derived datasets
 # Use predicciones/data/derived as the canonical location
-DERIVED_DIR = Path(__file__).parent.parent.parent / "data" / "derived"
+DERIVED_DIR = get_derived_dir()
+CACHE_DIR = get_cache_dir(espn=True)
+
+
+def _normalize_team_name(team_name: str) -> str:
+    """
+    Normalize a team name for consistent matching.
+    
+    Args:
+        team_name: Raw team name
+        
+    Returns:
+        Normalized team name (lowercase, stripped)
+    """
+    if not team_name:
+        return ""
+    return team_name.lower().strip()
 
 
 class TeamMatchStatsLoader:
@@ -79,15 +98,15 @@ class TeamMatchStatsLoader:
         all_rows = self._load_data()
         
         # Normalize team name for matching
-        team_normalized = self._normalize_team_name(team_name)
+        team_normalized = _normalize_team_name(team_name)
         
         matches = []
         for row in all_rows:
             home_team_raw = row.get("home_team", "")
             away_team_raw = row.get("away_team", "")
             
-            home_normalized = self._normalize_team_name(home_team_raw)
-            away_normalized = self._normalize_team_name(away_team_raw)
+            home_normalized = _normalize_team_name(home_team_raw)
+            away_normalized = _normalize_team_name(away_team_raw)
             
             is_home = team_normalized == home_normalized
             is_away = team_normalized == away_normalized
