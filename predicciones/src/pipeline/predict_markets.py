@@ -32,6 +32,7 @@ from ..domain.market_types import (
     MarketType,
     ConfidenceLevel,
     DataSource,
+    MarketAvailability,
 )
 from ..models.market_availability import MarketAvailabilityEvaluator
 from ..models.market_models import (
