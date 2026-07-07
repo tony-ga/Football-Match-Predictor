@@ -1,52 +1,77 @@
-```
-# Python
-__pycache__/
+# Compiled and build artifacts
 *.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
+__pycache__/
+*.o
+*.obj
+*.so
+*.dll
+*.exe
+*.class
+*.out
+
+# Dependencies
 .venv/
-.ENV
-.venv.bak/
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Testing
-.coverage
-coverage/
-htmlcov/
-.noserc
-.tox/
-.coverage.*
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*.tmp
-
-# Logs
-*.log
-
-# Environment
+venv/
 .env
 .env.local
 *.env.*
 
-# Build and distribution artifacts
-dist/
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# Editors
+.vscode/
+.idea/
+
+# Python specific
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
-*.egg-info/
-.eggs/
 develop-eggs/
-.installed.cfg
+dist/
+downloads/
+eggs/
+.eggs/
 lib/
 lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# OS generated files
+# Test related
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
+
+# Distribution / packaging
 .DS_Store
 Thumbs.db
-```
+*.tar*
+*.zip
+*.gz
+*.bz2
+*.xz
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo

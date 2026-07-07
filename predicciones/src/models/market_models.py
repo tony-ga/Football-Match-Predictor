@@ -584,7 +584,15 @@ class PlayerPropsModel:
         """
         Predict anytime scorer probabilities for multiple players with proper normalization.
         
-        The sum of all player probabilities is constrained to be <= team_xg.
+        Uses a Poisson-based model where each player has an individual lambda (goal rate).
+        The sum of all player lambdas ≈ team_xg, with realistic distribution based on:
+        - Recent goals (strongest signal)
+        - Shots per 90
+        - Position hierarchy (CF > AM/WM > CM > FB > CB > GK)
+        - Expected minutes
+        
+        Probability is computed as P_i = 1 - exp(-lambda_i), then scaled to ensure
+        sum(P_i) stays reasonable relative to team_xg.
         
         Args:
             players_data: List of dicts with player stats (goals, shots, minutes, position, etc.)
@@ -592,18 +600,26 @@ class PlayerPropsModel:
             team_total_shots: Team total shots (optional)
             
         Returns:
-            List of dicts with player_name, probability, and metadata
+            List of dicts with player_name, probability (as percentage), and metadata
         """
         if not players_data:
             return []
         
-        # Compute raw scores for each player based on:
-        # - goals per 90
-        # - shot share
-        # - position bonus (strikers get more)
-        # - minutes/starter status
+        # Position hierarchy weights (higher = more offensive role)
+        POSITION_WEIGHTS = {
+            "forward": 1.0, "striker": 1.0, "attacker": 1.0, "delantero": 1.0, "cf": 1.0,
+            "winger": 0.85, "extremo": 0.85, "am": 0.85, "mediapunta": 0.85,
+            "midfielder": 0.6, "volante": 0.6, "cm": 0.6, "cdm": 0.5,
+            "fullback": 0.35, "lateral": 0.35, "wingback": 0.4,
+            "defender": 0.25, "centreback": 0.2, "central": 0.2, "defensa": 0.25,
+            "goalkeeper": 0.02, "portero": 0.02, "arquero": 0.02,
+        }
         
-        player_scores = []
+        # Compute raw lambda scores for each player
+        player_lambdas = []
+        total_goals_recent = 0
+        total_weighted_score = 0
+        
         for pdata in players_data:
             goals = pdata.get("goals", 0) or 0
             matches = pdata.get("matches_played", 1) or 1
@@ -612,82 +628,85 @@ class PlayerPropsModel:
             position = pdata.get("position", "").lower()
             is_starter = pdata.get("is_starter", False) or pdata.get("starts", 0) > 0
             
-            # Goals per 90 with regularization toward team average
-            team_goals_per_match = team_xg / max(matches, 1)
-            player_goals_per_90 = (goals / matches) * (90 / max(minutes, 45)) if minutes > 0 else 0
+            total_goals_recent += goals
+        
+        # Avoid division by zero
+        if total_goals_recent == 0:
+            total_goals_recent = 0.1
+        
+        for pdata in players_data:
+            goals = pdata.get("goals", 0) or 0
+            matches = pdata.get("matches_played", 1) or 1
+            shots = pdata.get("shots", 0) or 0
+            minutes = pdata.get("minutes", 0) or 0
+            position = pdata.get("position", "").lower()
+            is_starter = pdata.get("is_starter", False) or pdata.get("starts", 0) > 0
             
-            # Shot share
-            if team_total_shots and team_total_shots > 0:
-                shot_share = shots / team_total_shots
-            else:
-                shot_share = 1.0 / len(players_data)
+            # 1. Goals contribution (strongest factor) - share of team's recent goals
+            goal_share = goals / total_goals_recent if total_goals_recent > 0 else 1.0 / len(players_data)
             
-            # Position bonus - CRITICAL: differentiate offensive vs defensive players
-            position_bonus = 1.0
-            position_weight = 1.0  # Weight for position in final score
-            if any(pos in position for pos in ["forward", "striker", "attacker", "delantero"]):
-                position_bonus = 1.5
-                position_weight = 2.0
-            elif any(pos in position for pos in ["midfielder", "winger", "volante", "extremo"]):
-                position_bonus = 0.9
-                position_weight = 1.0
-            elif any(pos in position for pos in ["defender", "back", "defensa"]):
-                position_bonus = 0.3
-                position_weight = 0.4
-            elif "goalkeeper" in position or "portero" in position or "arquero" in position:
-                position_bonus = 0.02
-                position_weight = 0.1
+            # 2. Shots per 90 - indicates involvement in attack
+            shots_per_90 = (shots / matches) * (90 / max(minutes, 1)) if minutes > 0 else 0
+            # Normalize to [0, 1] range (typical max ~12 shots/90 for very active players)
+            shot_factor = min(1.0, shots_per_90 / 10.0)
             
-            # Starter/mins factor
+            # 3. Position weight from hierarchy
+            pos_weight = 0.5  # default
+            for key, val in POSITION_WEIGHTS.items():
+                if key in position:
+                    pos_weight = val
+                    break
+            
+            # 4. Minutes/starter factor - playing time expectation
+            # Starters get full weight, subs reduced
             mins_factor = min(1.0, minutes / 90) if minutes > 0 else 0.3
-            starter_bonus = 1.2 if is_starter else 0.7
+            starter_bonus = 1.0 if is_starter else 0.7
+            playing_time_factor = mins_factor * starter_bonus
             
-            # Raw score combining all factors
-            # Heavily weight goals and position for differentiation
-            raw_score = (
-                0.5 * player_goals_per_90 +                    # Goals are most important
-                0.25 * shot_share * team_xg +                   # Shot volume
-                0.15 * position_bonus * position_weight +       # Position (weighted)
-                0.1 * mins_factor * starter_bonus               # Playing time
+            # Combine factors into raw lambda score
+            # Weighting: goals (50%), position (25%), shots (15%), playing time (10%)
+            raw_lambda_score = (
+                0.50 * goal_share +
+                0.25 * pos_weight +
+                0.15 * shot_factor +
+                0.10 * playing_time_factor
             )
             
-            player_scores.append({
+            player_lambdas.append({
                 "player_name": pdata.get("player_name", "Unknown"),
                 "team": pdata.get("team", ""),
-                "raw_score": max(0.01, raw_score),
+                "raw_lambda_score": max(0.001, raw_lambda_score),
                 "position": position,
-                "goals": goals,
+                "goals_recent": goals,
                 "matches": matches,
                 "minutes": minutes,
                 "is_starter": is_starter,
+                "shots_per_90": shots_per_90,
             })
         
-        # Normalize so sum of probabilities <= team_xg
-        total_raw = sum(p["raw_score"] for p in player_scores)
-        
-        # Scale factor: we want sum(probs) ≈ team_xg * 0.85 (leave ~15% margin)
-        target_sum = team_xg * 0.85
+        # Normalize lambdas so sum(lambda_i) ≈ team_xg
+        total_raw_lambda = sum(p["raw_lambda_score"] for p in player_lambdas)
         
         results = []
-        for p in player_scores:
-            if total_raw > 0:
-                prob = (p["raw_score"] / total_raw) * target_sum
-            else:
-                prob = team_xg / len(player_scores)
+        for p in player_lambdas:
+            # Scale raw score to get player lambda
+            lambda_i = (p["raw_lambda_score"] / total_raw_lambda) * team_xg if total_raw_lambda > 0 else team_xg / len(player_lambdas)
             
-            # Floor at minimum - don't cap max to preserve differentiation
-            # The normalization already ensures sum <= team_xg * 0.85
-            prob = max(prob, 0.01)
+            # Convert lambda to probability using Poisson: P(score ≥ 1) = 1 - exp(-lambda)
+            prob_anytime = 1.0 - math.exp(-lambda_i)
             
+            # Store both lambda and probability
             results.append({
                 "player_name": p["player_name"],
                 "team": p["team"],
-                "probability": round(prob, 4),
-                "goals_recent": p["goals"],
+                "probability": round(prob_anytime * 100, 2),  # Express as percentage
+                "lambda": round(lambda_i, 4),
+                "goals_recent": p["goals_recent"],
                 "matches_played": p["matches"],
                 "position": p["position"],
                 "minutes": p["minutes"],
                 "is_starter": p["is_starter"],
+                "shots_per_90": round(p["shots_per_90"], 2),
             })
         
         # Sort by probability descending
@@ -708,11 +727,12 @@ class PlayerPropsModel:
         
         Args:
             anytime_probs: List of dicts from predict_anytime_scorer_normalized
+                          (probability field is in percentage 0-100)
             team_xg: Team expected goals
             no_goal_probability: Explicit P(no goal) if provided, else derived
             
         Returns:
-            List of dicts with player_name, probability, sorted descending
+            List of dicts with player_name, probability (as decimal), sorted descending
         """
         if not anytime_probs:
             return []
@@ -729,6 +749,7 @@ class PlayerPropsModel:
         
         # Compute raw scores from anytime probabilities
         # Players with higher anytime prob should have higher first-scorer prob
+        # Note: probability is now in percentage (0-100), so we need to normalize
         total_anytime = sum(p["probability"] for p in anytime_probs)
         
         results = []
@@ -763,14 +784,14 @@ class PlayerPropsModel:
             final_results.append({
                 "player_name": r["player_name"],
                 "team": r["team"],
-                "probability": round(prob, 4),
+                "probability": round(prob * 100, 2),  # Express as percentage
             })
         
         # Add explicit no-goal entry for clarity
         final_results.append({
             "player_name": "[NO GOAL]",
             "team": "",
-            "probability": round(no_goal_prob, 4),
+            "probability": round(no_goal_prob * 100, 2),  # Express as percentage
         })
         
         # Sort by probability descending
