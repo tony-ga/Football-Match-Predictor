@@ -612,7 +612,7 @@ class TestPlayerPropsNormalization:
     """Test player props probability normalization and formatting."""
     
     def test_anytime_scorer_sum_bounded_by_lambda(self):
-        """Test that anytime scorer lambdas sum to ~team_xg and probabilities are in percentage."""
+        """Test that anytime scorer lambdas sum to ~team_xg and probabilities are properly separated."""
         model = PlayerPropsModel()
         
         players_data = [
@@ -631,13 +631,38 @@ class TestPlayerPropsNormalization:
         total_lambda = sum(p['lambda'] for p in result)
         assert abs(total_lambda - team_xg) < 0.1, f"Lambda sum {total_lambda} should be close to {team_xg}"
         
-        # Probabilities are now in percentage (0-100)
-        # Sum of probabilities should be reasonable (not exceeding ~100% per player * num_players)
-        total_prob = sum(p['probability'] for p in result)
-        assert total_prob > 0, "Should have non-zero probability"
-        # With percentages and Poisson model, sum can exceed 100% for multiple players
-        # but should stay bounded (e.g., < 200% for 3 players with team_xg=2.5)
-        assert total_prob <= 200, f"Probability sum {total_prob}% seems too high"
+        # Internal probability (decimal in [0,1]) should sum to reasonable value comparable to lambda
+        total_prob_decimal = sum(p['probability'] for p in result)
+        assert total_prob_decimal > 0, "Should have non-zero probability"
+        # Sum of P(anytime) should be bounded and related to team_xg
+        # For Poisson: sum(1 - exp(-λ_i)) ≈ team_xg for small λ_i
+        assert total_prob_decimal <= team_xg * 1.5, f"Decimal prob sum {total_prob_decimal} too high vs lambda {team_xg}"
+        
+        # Display percentage should also exist
+        assert all('probability_pct' in p for p in result), "Should have probability_pct field"
+        total_prob_pct = sum(p['probability_pct'] for p in result)
+        # Percentage sum should be 100x the decimal sum
+        assert abs(total_prob_pct - total_prob_decimal * 100) < 0.1, "Percentage should match decimal * 100"
+    
+    def test_anytime_scorer_internal_decimal_format(self):
+        """Test that internal probability is decimal [0,1] while display is percentage."""
+        model = PlayerPropsModel()
+        
+        players_data = [
+            {'player_name': 'Striker', 'team': 'Home', 'goals': 5, 'matches_played': 4, 
+             'shots': 20, 'minutes': 360, 'position': 'Forward', 'is_starter': True},
+        ]
+        
+        team_xg = 2.5
+        result = model.predict_anytime_scorer_normalized(players_data, team_xg)
+        
+        player = result[0]
+        # Internal probability should be in [0, 1]
+        assert 0 <= player['probability'] <= 1, f"Internal prob {player['probability']} should be in [0,1]"
+        # Display percentage should be in [0, 100]
+        assert 0 <= player['probability_pct'] <= 100, f"Display pct {player['probability_pct']} should be in [0,100]"
+        # They should be related by factor of 100
+        assert abs(player['probability_pct'] - player['probability'] * 100) < 0.01
     
     def test_anytime_scorer_lambda_distribution(self):
         """Test that lambda is distributed realistically across positions."""
@@ -672,25 +697,36 @@ class TestPlayerPropsNormalization:
         """Test first scorer probabilities sum to ~100% with no_goal (in percentage)."""
         model = PlayerPropsModel()
         
-        # Probabilities are now in percentage format (0-100)
+        # Use new format with probability as decimal [0,1] and probability_pct as percentage
         anytime_data = [
-            {'player_name': 'Player1', 'team': 'Home', 'probability': 40.0},
-            {'player_name': 'Player2', 'team': 'Home', 'probability': 30.0},
-            {'player_name': 'Player3', 'team': 'Away', 'probability': 20.0},
+            {'player_name': 'Player1', 'team': 'Home', 'probability': 0.40, 'probability_pct': 40.0},
+            {'player_name': 'Player2', 'team': 'Home', 'probability': 0.30, 'probability_pct': 30.0},
+            {'player_name': 'Player3', 'team': 'Away', 'probability': 0.20, 'probability_pct': 20.0},
         ]
         
         team_xg = 2.5
         result = model.predict_first_scorer_normalized(anytime_data, team_xg)
         
-        scorer_sum = sum(p['probability'] for p in result if p['player_name'] != '[NO GOAL]')
-        no_goal_prob = next((p['probability'] for p in result if p['player_name'] == '[NO GOAL]'), 0)
-        total = scorer_sum + no_goal_prob
+        # Check internal decimal values sum correctly
+        scorer_sum_decimal = sum(p.get('probability_decimal', p['probability'] / 100 if p['probability'] > 1 else p['probability']) 
+                                 for p in result if p['player_name'] != '[NO GOAL]')
+        no_goal_decimal = next((p.get('probability_decimal', p['probability'] / 100 if p['probability'] > 1 else p['probability']) 
+                               for p in result if p['player_name'] == '[NO GOAL]'), 0)
+        total_decimal = scorer_sum_decimal + no_goal_decimal
         
-        # Total should be very close to 100%
-        assert abs(total - 100.0) < 1.0, f"Total {total}% should be ~100%"
+        # Total should be very close to 1.0 (decimal)
+        assert abs(total_decimal - 1.0) < 0.01, f"Total {total_decimal} should be ~1.0"
+        
+        # Display percentages should also exist and sum to ~100%
+        scorer_sum_pct = sum(p['probability'] for p in result if p['player_name'] != '[NO GOAL]')
+        no_goal_pct = next((p['probability'] for p in result if p['player_name'] == '[NO GOAL]'), 0)
+        total_pct = scorer_sum_pct + no_goal_pct
+        
+        assert abs(total_pct - 100.0) < 1.0, f"Total percentage {total_pct}% should be ~100%"
+        
         # No goal probability should match Poisson P(0 goals) * 100
-        expected_no_goal = math.exp(-team_xg) * 100
-        assert abs(no_goal_prob - expected_no_goal) < 1.0
+        expected_no_goal_pct = math.exp(-team_xg) * 100
+        assert abs(no_goal_pct - expected_no_goal_pct) < 1.0
     
     def test_anytime_scorer_differentiates_positions(self):
         """Test that forwards get higher probability than defenders with same stats."""

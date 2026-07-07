@@ -695,11 +695,13 @@ class PlayerPropsModel:
             # Convert lambda to probability using Poisson: P(score ≥ 1) = 1 - exp(-lambda)
             prob_anytime = 1.0 - math.exp(-lambda_i)
             
-            # Store both lambda and probability
+            # Store both lambda and probability (internally as float in [0,1])
+            # Also store percentage format for display
             results.append({
                 "player_name": p["player_name"],
                 "team": p["team"],
-                "probability": round(prob_anytime * 100, 2),  # Express as percentage
+                "probability": round(prob_anytime, 4),  # Internal: float in [0,1]
+                "probability_pct": round(prob_anytime * 100, 2),  # Display: percentage
                 "lambda": round(lambda_i, 4),
                 "goals_recent": p["goals_recent"],
                 "matches_played": p["matches"],
@@ -727,12 +729,13 @@ class PlayerPropsModel:
         
         Args:
             anytime_probs: List of dicts from predict_anytime_scorer_normalized
-                          (probability field is in percentage 0-100)
+                          (probability field is float in [0,1], probability_pct is percentage)
             team_xg: Team expected goals
             no_goal_probability: Explicit P(no goal) if provided, else derived
             
         Returns:
-            List of dicts with player_name, probability (as decimal), sorted descending
+            List of dicts with player_name, probability (as percentage for display),
+            and probability_decimal (internal float in [0,1]), sorted descending
         """
         if not anytime_probs:
             return []
@@ -749,14 +752,20 @@ class PlayerPropsModel:
         
         # Compute raw scores from anytime probabilities
         # Players with higher anytime prob should have higher first-scorer prob
-        # Note: probability is now in percentage (0-100), so we need to normalize
-        total_anytime = sum(p["probability"] for p in anytime_probs)
+        # Use probability (float in [0,1]) for internal calculation
+        total_anytime = sum(p.get("probability", p.get("probability_pct", 0) / 100) for p in anytime_probs)
         
         results = []
         for p in anytime_probs:
+            # Get probability as decimal (handle both old and new format)
+            prob_decimal = p.get("probability", 0)
+            # If probability > 1, assume it's percentage and convert
+            if prob_decimal > 1.0:
+                prob_decimal = prob_decimal / 100
+            
             if total_anytime > 0:
                 # Allocate scorer_mass proportionally to anytime probability
-                raw_score = p["probability"] / total_anytime
+                raw_score = prob_decimal / total_anytime
             else:
                 raw_score = 1.0 / len(anytime_probs)
             
@@ -784,14 +793,16 @@ class PlayerPropsModel:
             final_results.append({
                 "player_name": r["player_name"],
                 "team": r["team"],
-                "probability": round(prob * 100, 2),  # Express as percentage
+                "probability": round(prob * 100, 2),  # Display: percentage
+                "probability_decimal": round(prob, 4),  # Internal: float in [0,1]
             })
         
         # Add explicit no-goal entry for clarity
         final_results.append({
             "player_name": "[NO GOAL]",
             "team": "",
-            "probability": round(no_goal_prob * 100, 2),  # Express as percentage
+            "probability": round(no_goal_prob * 100, 2),  # Display: percentage
+            "probability_decimal": round(no_goal_prob, 4),  # Internal: float in [0,1]
         })
         
         # Sort by probability descending
