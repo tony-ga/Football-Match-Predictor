@@ -218,7 +218,13 @@ class MatchSelector:
         if not summary:
             raise EspnApiError(f"No summary found for event {event_id}")
         
+        # Try multiple locations for competitions
         competitions = summary.get("competitions", [])
+        if not competitions:
+            # Fallback to header.competitions (new ESPN API format)
+            header = summary.get("header", {})
+            competitions = header.get("competitions", [])
+        
         if not competitions:
             raise EspnApiError(f"No competitions in summary for event {event_id}")
         
@@ -228,10 +234,13 @@ class MatchSelector:
         home_comp = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0] if competitors else {})
         away_comp = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1] if len(competitors) > 1 else {})
         
+        # Get header for fallback league info
+        header = summary.get("header", {})
+        
         return {
             "event_id": event_id,
             "date": summary.get("date", ""),
-            "competition": summary.get("league", {}).get("name", ""),
+            "competition": summary.get("league", {}).get("name", "") or header.get("league", {}).get("name", ""),
             "home_team": home_comp.get("team", {}).get("displayName", ""),
             "away_team": away_comp.get("team", {}).get("displayName", ""),
             "venue": comp.get("venue", {}).get("fullName"),
