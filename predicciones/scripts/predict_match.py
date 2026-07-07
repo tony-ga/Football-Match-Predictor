@@ -20,6 +20,7 @@ import argparse
 import json
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,6 +53,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 console = Console()
+
+
+def get_local_date_str() -> str:
+    """
+    Get current date in YYYYMMDD format using local timezone.
+    
+    Returns:
+        Date string in YYYYMMDD format based on local system time
+    """
+    return datetime.now().strftime("%Y%m%d")
 
 
 def print_match_table(matches: List[UpcomingMatch], max_display: int = 20) -> None:
