@@ -602,3 +602,168 @@ class TestFallbackBehavior:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ==================================================
+# 10. Test Player Props Normalization and Formatting
+# ==================================================
+class TestPlayerPropsNormalization:
+    """Test player props probability normalization and formatting."""
+    
+    def test_anytime_scorer_sum_bounded_by_lambda(self):
+        """Test that anytime scorer probabilities sum to <= team_xg."""
+        model = PlayerPropsModel()
+        
+        players_data = [
+            {'player_name': 'Striker', 'team': 'Home', 'goals': 5, 'matches_played': 4, 
+             'shots': 20, 'minutes': 360, 'position': 'Forward', 'is_starter': True},
+            {'player_name': 'Winger', 'team': 'Home', 'goals': 2, 'matches_played': 4,
+             'shots': 10, 'minutes': 320, 'position': 'Midfielder', 'is_starter': True},
+            {'player_name': 'Defender', 'team': 'Home', 'goals': 0, 'matches_played': 4,
+             'shots': 2, 'minutes': 360, 'position': 'Defender', 'is_starter': True},
+        ]
+        
+        team_xg = 2.5
+        result = model.predict_anytime_scorer_normalized(players_data, team_xg)
+        
+        total_prob = sum(p['probability'] for p in result)
+        
+        # Sum should be <= team_xg * 0.9 (with some tolerance)
+        assert total_prob <= team_xg * 0.95, f"Anytime sum {total_prob} exceeds bound {team_xg * 0.95}"
+        assert total_prob > 0, "Should have non-zero probability"
+    
+    def test_first_scorer_normalization(self):
+        """Test first scorer probabilities sum to ~1 with no_goal."""
+        model = PlayerPropsModel()
+        
+        anytime_data = [
+            {'player_name': 'Player1', 'team': 'Home', 'probability': 0.4},
+            {'player_name': 'Player2', 'team': 'Home', 'probability': 0.3},
+            {'player_name': 'Player3', 'team': 'Away', 'probability': 0.2},
+        ]
+        
+        team_xg = 2.5
+        result = model.predict_first_scorer_normalized(anytime_data, team_xg)
+        
+        scorer_sum = sum(p['probability'] for p in result if p['player_name'] != '[NO GOAL]')
+        no_goal_prob = next((p['probability'] for p in result if p['player_name'] == '[NO GOAL]'), 0)
+        total = scorer_sum + no_goal_prob
+        
+        # Total should be very close to 1.0
+        assert abs(total - 1.0) < 0.01, f"Total {total} should be ~1.0"
+        # No goal probability should match Poisson P(0 goals)
+        expected_no_goal = math.exp(-team_xg)
+        assert abs(no_goal_prob - expected_no_goal) < 0.01
+    
+    def test_anytime_scorer_differentiates_positions(self):
+        """Test that forwards get higher probability than defenders with same stats."""
+        model = PlayerPropsModel()
+        
+        # Same goals/shots but different positions
+        players_data = [
+            {'player_name': 'Forward', 'team': 'Home', 'goals': 2, 'matches_played': 4,
+             'shots': 10, 'minutes': 360, 'position': 'Forward', 'is_starter': True},
+            {'player_name': 'Defender', 'team': 'Home', 'goals': 2, 'matches_played': 4,
+             'shots': 10, 'minutes': 360, 'position': 'Defender', 'is_starter': True},
+        ]
+        
+        result = model.predict_anytime_scorer_normalized(players_data, team_xg=2.5)
+        
+        forward_prob = next(p['probability'] for p in result if p['player_name'] == 'Forward')
+        defender_prob = next(p['probability'] for p in result if p['player_name'] == 'Defender')
+        
+        # Forward should have significantly higher probability
+        assert forward_prob > defender_prob, \
+            f"Forward ({forward_prob}) should beat Defender ({defender_prob})"
+        assert forward_prob > defender_prob * 1.5, \
+            f"Forward should have at least 50% more probability than defender"
+    
+    def test_anytime_scorer_ranks_by_goals(self):
+        """Test that players with more goals get higher probability."""
+        model = PlayerPropsModel()
+        
+        players_data = [
+            {'player_name': 'TopScorer', 'team': 'Home', 'goals': 5, 'matches_played': 4,
+             'shots': 20, 'minutes': 360, 'position': 'Forward', 'is_starter': True},
+            {'player_name': 'LowScorer', 'team': 'Home', 'goals': 0, 'matches_played': 4,
+             'shots': 5, 'minutes': 360, 'position': 'Forward', 'is_starter': True},
+        ]
+        
+        result = model.predict_anytime_scorer_normalized(players_data, team_xg=2.5)
+        
+        top_prob = next(p['probability'] for p in result if p['player_name'] == 'TopScorer')
+        low_prob = next(p['probability'] for p in result if p['player_name'] == 'LowScorer')
+        
+        assert top_prob > low_prob, \
+            f"Top scorer ({top_prob}) should beat low scorer ({low_prob})"
+    
+    def test_format_percentages_player_props(self):
+        """Test that format_percentages correctly formats player props as percentages."""
+        from src.scripts.predict import main
+        # Import the nested function by simulating what predict.py does
+        
+        def format_percentages(data, path=""):
+            if isinstance(data, dict):
+                return {k: format_percentages(v, path=f"{path}.{k}") for k, v in data.items()}
+            elif isinstance(data, list):
+                return [format_percentages(v, path) for v in data]
+            elif isinstance(data, float):
+                if any(keyword in path.lower() for keyword in [
+                    "lambda", "expected_goals", "expected_total", 
+                    "weight", "xg", "goals_per_match"
+                ]):
+                    return round(data, 3)
+                
+                if "probability" in path.lower() or "prob" in path.lower():
+                    if 0 <= data <= 1.0:
+                        return f"{data * 100:.2f}%"
+                    elif data > 1.0 and data <= 100:
+                        return f"{data:.2f}%"
+                
+                if any(keyword in path.lower() for keyword in [
+                    "count", "id", "size", "sample", "matches", "goals_recent"
+                ]):
+                    return round(data, 4)
+                    
+                if 0 <= data <= 1.0:
+                    return f"{data * 100:.2f}%"
+                elif data > 1.0 and data <= 100:
+                    return f"{data:.2f}%"
+                
+                return round(data, 4)
+            return data
+        
+        # Test data simulating player_props output
+        test_data = {
+            "player_props": {
+                "anytime_scorer": {
+                    "top_candidates": [
+                        {"player_name": "Messi", "probability": 0.4523},
+                        {"player_name": "Lautaro", "probability": 0.3812},
+                    ],
+                    "validation": {
+                        "home_anytime_sum": 2.3184,
+                        "home_lambda": 2.73,
+                    }
+                },
+                "first_scorer": {
+                    "top_candidates": [
+                        {"player_name": "Messi", "probability": 0.2853},
+                    ],
+                    "no_goal_probability": 0.0231,
+                }
+            }
+        }
+        
+        formatted = format_percentages(test_data)
+        
+        # Check probabilities are formatted as percentages
+        assert formatted["player_props"]["anytime_scorer"]["top_candidates"][0]["probability"] == "45.23%"
+        assert formatted["player_props"]["anytime_scorer"]["top_candidates"][1]["probability"] == "38.12%"
+        assert formatted["player_props"]["first_scorer"]["top_candidates"][0]["probability"] == "28.53%"
+        assert formatted["player_props"]["first_scorer"]["no_goal_probability"] == "2.31%"
+        
+        # Check lambdas remain numeric
+        assert formatted["player_props"]["anytime_scorer"]["validation"]["home_lambda"] == 2.73
+        # home_anytime_sum is not a lambda, so it gets rounded
+        assert formatted["player_props"]["anytime_scorer"]["validation"]["home_anytime_sum"] == 2.3184

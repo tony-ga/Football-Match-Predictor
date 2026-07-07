@@ -622,27 +622,33 @@ class PlayerPropsModel:
             else:
                 shot_share = 1.0 / len(players_data)
             
-            # Position bonus
+            # Position bonus - CRITICAL: differentiate offensive vs defensive players
             position_bonus = 1.0
-            if any(pos in position for pos in ["forward", "striker", "attacker"]):
-                position_bonus = 1.3
-            elif any(pos in position for pos in ["midfielder", "winger"]):
-                position_bonus = 1.0
-            elif any(pos in position for pos in ["defender", "back"]):
-                position_bonus = 0.5
-            elif "goalkeeper" in position:
-                position_bonus = 0.05
+            position_weight = 1.0  # Weight for position in final score
+            if any(pos in position for pos in ["forward", "striker", "attacker", "delantero"]):
+                position_bonus = 1.5
+                position_weight = 2.0
+            elif any(pos in position for pos in ["midfielder", "winger", "volante", "extremo"]):
+                position_bonus = 0.9
+                position_weight = 1.0
+            elif any(pos in position for pos in ["defender", "back", "defensa"]):
+                position_bonus = 0.3
+                position_weight = 0.4
+            elif "goalkeeper" in position or "portero" in position or "arquero" in position:
+                position_bonus = 0.02
+                position_weight = 0.1
             
             # Starter/mins factor
             mins_factor = min(1.0, minutes / 90) if minutes > 0 else 0.3
-            starter_bonus = 1.2 if is_starter else 0.8
+            starter_bonus = 1.2 if is_starter else 0.7
             
             # Raw score combining all factors
+            # Heavily weight goals and position for differentiation
             raw_score = (
-                0.4 * player_goals_per_90 +
-                0.3 * shot_share * team_xg +
-                0.2 * position_bonus +
-                0.1 * mins_factor * starter_bonus
+                0.5 * player_goals_per_90 +                    # Goals are most important
+                0.25 * shot_share * team_xg +                   # Shot volume
+                0.15 * position_bonus * position_weight +       # Position (weighted)
+                0.1 * mins_factor * starter_bonus               # Playing time
             )
             
             player_scores.append({
@@ -652,14 +658,15 @@ class PlayerPropsModel:
                 "position": position,
                 "goals": goals,
                 "matches": matches,
+                "minutes": minutes,
+                "is_starter": is_starter,
             })
         
         # Normalize so sum of probabilities <= team_xg
         total_raw = sum(p["raw_score"] for p in player_scores)
         
-        # Scale factor: we want sum(probs) ≈ team_xg * 0.9 (leave some margin)
-        # But also cap individual probs at reasonable levels
-        target_sum = team_xg * 0.85  # Leave ~15% for unmodeled players/events
+        # Scale factor: we want sum(probs) ≈ team_xg * 0.85 (leave ~15% margin)
+        target_sum = team_xg * 0.85
         
         results = []
         for p in player_scores:
@@ -668,9 +675,8 @@ class PlayerPropsModel:
             else:
                 prob = team_xg / len(player_scores)
             
-            # Cap individual probability (no single player should have >60% anytime)
-            prob = min(prob, 0.60)
-            # Floor at minimum
+            # Floor at minimum - don't cap max to preserve differentiation
+            # The normalization already ensures sum <= team_xg * 0.85
             prob = max(prob, 0.01)
             
             results.append({
@@ -679,6 +685,9 @@ class PlayerPropsModel:
                 "probability": round(prob, 4),
                 "goals_recent": p["goals"],
                 "matches_played": p["matches"],
+                "position": p["position"],
+                "minutes": p["minutes"],
+                "is_starter": p["is_starter"],
             })
         
         # Sort by probability descending
