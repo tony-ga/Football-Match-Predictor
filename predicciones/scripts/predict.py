@@ -65,14 +65,56 @@ def main():
     display_response["predictions"] = display_markets
 
     def format_percentages(data, path=""):
+        """
+        Format numeric values for display.
+        
+        - Probabilities (0-1 range) are shown as percentages like "29.11%"
+        - Lambdas, expected goals, and totals remain as floats
+        - player_props probability fields are formatted as percentages
+        
+        Args:
+            data: The data structure to format
+            path: Current path in the data structure (for context-aware formatting)
+            
+        Returns:
+            Formatted data structure with percentages as strings
+        """
         if isinstance(data, dict):
             return {k: format_percentages(v, path=f"{path}.{k}") for k, v in data.items()}
         elif isinstance(data, list):
             return [format_percentages(v, path) for v in data]
         elif isinstance(data, float):
-            if "lambda" in path.lower() or "expected_goals" in path.lower() or "total" in path.lower() or "weight" in path.lower():
+            # Keep lambdas, expected goals, and totals as numeric
+            if any(keyword in path.lower() for keyword in [
+                "lambda", "expected_goals", "expected_total", 
+                "weight", "xg", "goals_per_match"
+            ]):
                 return round(data, 3)
-            return f"{data * 100:.2f}%"
+            
+            # Check if this is a probability field in player_props
+            # that should be displayed as percentage
+            if "probability" in path.lower() or "prob" in path.lower():
+                # Ensure it's in 0-1 range before converting to percentage
+                if 0 <= data <= 1.0:
+                    return f"{data * 100:.2f}%"
+                elif data > 1.0 and data <= 100:
+                    # Already a percentage, just format
+                    return f"{data:.2f}%"
+            
+            # General case: assume 0-1 probability for other fields
+            # Skip fields that look like counts or IDs
+            if any(keyword in path.lower() for keyword in [
+                "count", "id", "size", "sample", "matches", "goals_recent"
+            ]):
+                return round(data, 4)
+                
+            # Default: format as percentage for probabilities
+            if 0 <= data <= 1.0:
+                return f"{data * 100:.2f}%"
+            elif data > 1.0 and data <= 100:
+                return f"{data:.2f}%"
+            
+            return round(data, 4)
         return data
 
     def replace_team_names(data, home_name, away_name):
