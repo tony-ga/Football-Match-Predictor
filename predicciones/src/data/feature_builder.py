@@ -280,7 +280,7 @@ class MatchFeatureBuilder:
         # Intentar ESPN primero si está disponible
         if self.espn and include_wc_matches:
             try:
-                matches = self.espn.get_recent_team_matches(team_name, limit=200)
+                matches = self.espn.get_recent_team_matches(team_name, days_back=60, max_matches=8)
                 completed_matches = [m for m in matches if m.get("completed", False)]
                 
                 if len(completed_matches) >= 3:
