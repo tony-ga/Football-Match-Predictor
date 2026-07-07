@@ -359,10 +359,18 @@ def _build_alternative_markets(
             all_anytime_for_first, total_xg
         )
         
-        # Validation: check probability sums
-        anytime_sum_home = sum(p["probability"] for p in home_anytime)
-        anytime_sum_away = sum(p["probability"] for p in away_anytime)
-        first_scorer_sum = sum(p["probability"] for p in first_scorers if p["player_name"] != "[NO GOAL]")
+        # Validation: check probability sums using INTERNAL decimal values (not percentages)
+        # home_anytime_sum and away_anytime_sum should be comparable to lambda values (2-3 range)
+        anytime_sum_home = sum(p.get("probability_decimal", p["probability"] / 100 if p["probability"] > 1 else p["probability"]) 
+                               for p in home_anytime)
+        anytime_sum_away = sum(p.get("probability_decimal", p["probability"] / 100 if p["probability"] > 1 else p["probability"]) 
+                               for p in away_anytime)
+        
+        # For first scorer, use decimal values
+        first_scorer_sum = sum(
+            p.get("probability_decimal", p["probability"] / 100 if p["probability"] > 1 else p["probability"]) 
+            for p in first_scorers if p["player_name"] != "[NO GOAL]"
+        )
         
         logger.info(f"Player props validation: anytime_home_sum={anytime_sum_home:.3f} (λ_h={lambda_h:.2f}), anytime_away_sum={anytime_sum_away:.3f} (λ_a={lambda_a:.2f}), first_scorer_sum={first_scorer_sum:.3f}")
         
@@ -372,8 +380,8 @@ def _build_alternative_markets(
                 "available": len(anytime_scorers) > 0,
                 "top_candidates": anytime_scorers[:10],
                 "validation": {
-                    "home_anytime_sum": round(anytime_sum_home, 4),
-                    "away_anytime_sum": round(anytime_sum_away, 4),
+                    "home_anytime_sum": round(anytime_sum_home, 4),  # Sum of decimal probabilities
+                    "away_anytime_sum": round(anytime_sum_away, 4),  # Sum of decimal probabilities
                     "home_lambda": round(lambda_h, 2),
                     "away_lambda": round(lambda_a, 2),
                 },
@@ -383,8 +391,8 @@ def _build_alternative_markets(
                 "top_candidates": [p for p in first_scorers if p["player_name"] != "[NO GOAL]"][:10],
                 "no_goal_probability": next((p["probability"] for p in first_scorers if p["player_name"] == "[NO GOAL]"), None),
                 "validation": {
-                    "scorer_sum": round(first_scorer_sum, 4),
-                    "total_with_no_goal": round(sum(p["probability"] for p in first_scorers), 4),
+                    "scorer_sum": round(first_scorer_sum * 100, 4),  # Express as percentage for display
+                    "total_with_no_goal": round(sum(p.get("probability_decimal", p["probability"] / 100 if p["probability"] > 1 else p["probability"]) for p in first_scorers) * 100, 4),
                 },
             },
             "assists": {"available": False, "reason": "Insufficient assist data for reliable predictions"},
