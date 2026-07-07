@@ -4,6 +4,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
 
+from ..utils.team_normalization import normalize_team_name
+
 logger = logging.getLogger(__name__)
 
 # Ruta al archivo de ratings estáticos del Mundial 2026
@@ -261,9 +263,12 @@ class MatchFeatureBuilder:
         teams = self._ratings.get("teams", {})
         default = self._ratings.get("default", {"attack": 1.10, "defense": 1.00, "fifa_rank": 100})
         
-        rating = teams.get(team_name, default)
-        if team_name not in teams:
-            logger.warning(f"Team '{team_name}' not in ratings_wc2026.json, using default.")
+        # Normalize team name for ratings lookup
+        normalized_team = normalize_team_name(team_name, context="ratings")
+        rating = teams.get(normalized_team, default)
+        
+        if normalized_team not in teams:
+            logger.warning(f"Team '{team_name}' (normalized: '{normalized_team}') not in ratings_wc2026.json, using default.")
         
         base_lambda_attack = rating["attack"]
         base_lambda_defense = rating["defense"]

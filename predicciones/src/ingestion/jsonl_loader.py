@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 # Import canonical path helpers
 from src.utils.config_paths import get_derived_dir, get_cache_dir
+from src.utils.team_normalization import normalize_team_name as normalize_team_centralized
 
 logger = logging.getLogger(__name__)
 
@@ -288,12 +289,21 @@ class PlayerMatchStatsLoader:
             Dict keyed by player_name with aggregated stats
         """
         all_rows = self._load_data()
-        team_lower = team_name.lower()
+        
+        # Normalize the input team name using centralized function
+        # This handles USA -> United States, Belgique -> Belgium, etc.
+        team_normalized_input = normalize_team_centralized(team_name)
         
         # First, find relevant event_ids for this team's recent matches
+        # The dataset uses "team" field with values like "United States", "Belgium"
         event_ids = set()
         for row in all_rows:
-            if row.get("team", "").lower() == team_lower:
+            row_team = row.get("team", "")
+            # Normalize the row team name for comparison
+            row_team_normalized = normalize_team_centralized(row_team)
+            
+            # Match if either the input or row normalization matches
+            if row_team_normalized == team_normalized_input or row_team.lower() == team_name.lower():
                 event_ids.add(row.get("event_id", ""))
         
         # Limit to most recent matches
@@ -310,7 +320,11 @@ class PlayerMatchStatsLoader:
         player_stats: Dict[str, Dict[str, Any]] = {}
         
         for row in all_rows:
-            if row.get("team", "").lower() != team_lower:
+            # Use normalized team matching
+            row_team = row.get("team", "")
+            row_team_normalized = normalize_team_centralized(row_team)
+            
+            if row_team_normalized != team_normalized_input and row_team.lower() != team_name.lower():
                 continue
             if row.get("event_id", "") not in recent_event_ids:
                 continue
