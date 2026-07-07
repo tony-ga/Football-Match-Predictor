@@ -3,6 +3,12 @@ Market Availability Evaluator.
 
 Determines whether sufficient data exists to make predictions for each market type.
 Implements feature gating based on ESPN data coverage.
+
+Supports multi-level player data availability:
+- Level 1: roster coverage (players parseable from rosters)
+- Level 2: player signal coverage (roster + leaders/offensive signals)
+- Level 3: player event coverage (goals, cards, substitutions from keyEvents)
+- Level 4: full player stats coverage (complete numerical stats per player)
 """
 from __future__ import annotations
 
@@ -25,7 +31,8 @@ class MarketAvailabilityEvaluator:
     Each market has minimum data requirements:
     - corners_total: >= 3 matches with team-level corner stats
     - first_corner: >= 3 matches with event-level corner sequence
-    - player_props: >= 3 matches with player-level stats and lineup mapping
+    - player_props_partial: >= 3 matches with roster + offensive signals
+    - player_props_full: >= 3 matches with complete player stats
     - etc.
     """
     
@@ -190,54 +197,105 @@ class MarketAvailabilityEvaluator:
         away_recent_matches: List[Dict[str, Any]],
         home_lineup_available: bool = False,
         away_lineup_available: bool = False,
-    ) -> MarketAvailability:
+    ) -> Dict[str, Any]:
         """
-        Evaluate availability for player props markets.
+        Evaluate availability for player props markets at multiple levels.
         
-        Player props require:
-        - Player-level stats in recent matches
-        - Lineup information (confirmed or estimated)
+        Player props now support partial availability:
+        - Level 1: roster coverage
+        - Level 2: player signal coverage  
+        - Level 3: player event coverage
+        - Level 4: full player stats coverage
+        
+        Returns dict with granular availability info for each prop type.
+        
+        Args:
+            home_recent_matches: Recent matches for home team
+            away_recent_matches: Recent matches for away team
+            home_lineup_available: Whether home lineup is known
+            away_lineup_available: Whether away lineup is known
+            
+        Returns:
+            Dict with availability info for each prop type
         """
         total_matches = home_recent_matches + away_recent_matches
         
-        # Count matches with player stats
-        matches_with_players = [
-            m for m in total_matches
-            if self._has_player_stats(m)
-        ]
-        player_sample_size = len(matches_with_players)
+        # Count matches at each level
+        matches_with_rosters = [m for m in total_matches if self._has_player_roster(m)]
+        matches_with_signals = [m for m in total_matches if self._has_player_signals(m)]
+        matches_with_events = [m for m in total_matches if self._has_player_events(m)]
+        matches_with_full_stats = [m for m in total_matches if self._has_full_player_stats(m)]
         
-        # Need both player stats AND some lineup info
+        roster_count = len(matches_with_rosters)
+        signal_count = len(matches_with_signals)
+        event_count = len(matches_with_events)
+        full_stats_count = len(matches_with_full_stats)
+        
         has_some_lineup = home_lineup_available or away_lineup_available
         
-        if player_sample_size >= self.MIN_SAMPLES_PLAYER and has_some_lineup:
-            confidence = self._compute_confidence(player_sample_size, 8)
-            # Lower confidence if no confirmed lineups
-            if not home_lineup_available or not away_lineup_available:
-                if confidence == ConfidenceLevel.HIGH:
-                    confidence = ConfidenceLevel.MEDIUM
-                elif confidence == ConfidenceLevel.MEDIUM:
-                    confidence = ConfidenceLevel.LOW
-            
-            return MarketAvailability(
-                available=True,
-                sample_size=player_sample_size,
-                confidence=confidence,
-                data_source=DataSource.HYBRID if has_some_lineup else DataSource.ESPN_RECENT_MATCHES,
-            )
+        # Determine overall availability
+        any_player_data = roster_count > 0 or signal_count > 0 or event_count > 0
+        
+        # Scorer props (anytime, first) need: roster + (signals OR events with goals)
+        scorer_props_available = (
+            roster_count >= self.MIN_SAMPLES_PLAYER 
+            and (signal_count >= 1 or event_count >= 1)
+        )
+        
+        # SOT and assists need full player stats
+        stats_props_available = full_stats_count >= self.MIN_SAMPLES_PLAYER
+        
+        # Build detailed response
+        result = {
+            "available": any_player_data,
+            "coverage_levels": {
+                "matches_with_rosters": roster_count,
+                "matches_with_player_signals": signal_count,
+                "matches_with_player_events": event_count,
+                "matches_with_full_player_stats": full_stats_count,
+            },
+            "prop_availability": {
+                "anytime_scorer": {
+                    "available": scorer_props_available,
+                    "reason": None if scorer_props_available else "Insufficient roster + offensive signal data for scorer props",
+                },
+                "first_scorer": {
+                    "available": scorer_props_available,
+                    "reason": None if scorer_props_available else "Insufficient roster + offensive signal data for scorer props",
+                },
+                "shots_on_target": {
+                    "available": stats_props_available,
+                    "reason": None if stats_props_available else "No reliable player-level shots on target history found",
+                },
+                "assists": {
+                    "available": stats_props_available,
+                    "reason": None if stats_props_available else "No reliable player-level assist history found",
+                },
+            },
+        }
+        
+        # Compute overall confidence based on best available level
+        if full_stats_count >= self.MIN_SAMPLES_PLAYER:
+            confidence = self._compute_confidence(full_stats_count, 8)
+            data_source = DataSource.HYBRID if has_some_lineup else DataSource.ESPN_RECENT_MATCHES
+        elif event_count >= self.MIN_SAMPLES_PLAYER:
+            confidence = ConfidenceLevel.LOW
+            data_source = DataSource.ESPN_SUMMARY
+        elif signal_count >= self.MIN_SAMPLES_PLAYER:
+            confidence = ConfidenceLevel.LOW
+            data_source = DataSource.ESPN_SUMMARY
+        elif roster_count >= self.MIN_SAMPLES_PLAYER:
+            confidence = ConfidenceLevel.LOW
+            data_source = DataSource.ESPN_RECENT_MATCHES
         else:
-            reasons = []
-            if player_sample_size < self.MIN_SAMPLES_PLAYER:
-                reasons.append(f"insufficient player stats ({player_sample_size} < {self.MIN_SAMPLES_PLAYER})")
-            if not has_some_lineup:
-                reasons.append("no lineup information available")
-            
-            return MarketAvailability(
-                available=False,
-                reason="; ".join(reasons),
-                sample_size=player_sample_size,
-                data_source=DataSource.UNAVAILABLE,
-            )
+            confidence = ConfidenceLevel.LOW
+            data_source = DataSource.UNAVAILABLE
+        
+        result["sample_size"] = max(roster_count, signal_count, event_count, full_stats_count)
+        result["confidence"] = confidence.value
+        result["data_source"] = data_source.value
+        
+        return result
     
     def _has_corner_stats(self, match: Dict[str, Any]) -> bool:
         """Check if match has corner statistics."""
@@ -269,10 +327,43 @@ class MarketAvailabilityEvaluator:
             stats.get("away_shots_on_target") is not None,
         ])
     
-    def _has_player_stats(self, match: Dict[str, Any]) -> bool:
-        """Check if match has player-level statistics."""
+    def _has_player_roster(self, match: Dict[str, Any]) -> bool:
+        """Check if match has player roster data."""
         players = match.get("players", [])
         return len(players) > 0
+    
+    def _has_player_signals(self, match: Dict[str, Any]) -> bool:
+        """Check if match has player signals (leaders, offensive indicators)."""
+        signals = match.get("player_signals", [])
+        return len(signals) > 0
+    
+    def _has_player_events(self, match: Dict[str, Any]) -> bool:
+        """Check if match has player events (goals, cards, subs)."""
+        events = match.get("player_events", [])
+        # Check for goal events specifically
+        goal_events = [e for e in events if e.get("event_type") in ("goal", "own_goal")]
+        return len(goal_events) > 0
+    
+    def _has_full_player_stats(self, match: Dict[str, Any]) -> bool:
+        """Check if match has full player-level statistics."""
+        players = match.get("players", [])
+        if not players:
+            return False
+        
+        # Need at least some players with meaningful stats
+        players_with_stats = [
+            p for p in players
+            if p.get("goals") is not None or p.get("assists") is not None or p.get("shots") is not None
+        ]
+        return len(players_with_stats) >= 3
+    
+    def _has_player_stats(self, match: Dict[str, Any]) -> bool:
+        """Legacy method - check if match has any player-level data."""
+        return (
+            self._has_player_roster(match) 
+            or self._has_player_signals(match)
+            or self._has_player_events(match)
+        )
     
     def _compute_confidence(self, sample_size: int, high_threshold: int = 10) -> ConfidenceLevel:
         """Compute confidence level based on sample size."""
