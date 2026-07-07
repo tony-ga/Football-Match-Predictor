@@ -1,41 +1,33 @@
-```gitignore
-# Python
-__pycache__/
+```
+# Compiled Python files
 *.pyc
-*.pyo
-*.pyd
-
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment
-.env
-.env.local
-*.env.*
+__pycache__/
 
 # Dependencies
 .venv/
 venv/
-.env/
+node_modules/
 
-# Build artifacts
-dist/
-build/
-target/
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
-# Coverage
-.coverage
-coverage/
-htmlcov/
+# Environment files
+.env
+.env.local
+*.env.*
 
 # Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# System
-.DS_Store
-Thumbs.db
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# Python cache
+.mypy_cache/
+.pytest_cache/
 ```

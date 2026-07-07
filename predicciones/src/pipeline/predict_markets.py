@@ -3,12 +3,25 @@ Market Predictions Pipeline.
 
 Integrates all market models (corners, cards, shots, player props)
 with availability checking and feature gating.
+
+Supports partial player props availability:
+- anytime_scorer: Available with roster + offensive signals
+- first_scorer: Available with roster + offensive signals  
+- shots_on_target: Requires full player stats
+- assists: Requires full player stats
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
 
+from ..data.espn_player_parsers import (
+    extract_roster_players,
+    extract_player_signals,
+    extract_player_events,
+    build_player_match_rows,
+    check_player_data_availability,
+)
 from ..domain.market_types import (
     AllMarketsOutput,
     CornersMarketPrediction,
@@ -425,16 +438,198 @@ class MarketsPredictor:
         team_xg_home: float,
         team_xg_away: float,
     ) -> PlayerPropsPrediction:
-        """Generate player props predictions."""
-        # For now, return unavailable - proper implementation needs lineup data
-        avail = self.availability_evaluator.evaluate_player_props_availability(
+        """
+        Generate player props predictions with partial availability support.
+        
+        Uses new multi-level availability:
+        - Roster + signals enables scorer props
+        - Full stats required for SOT/assists props
+        """
+        # Evaluate availability at multiple levels
+        avail_result = self.availability_evaluator.evaluate_player_props_availability(
             home_matches, away_matches,
             home_lineup_available=False,
             away_lineup_available=False,
         )
         
+        # Extract prop-specific availability
+        prop_avail = avail_result.get("prop_availability", {})
+        anytime_avail = prop_avail.get("anytime_scorer", {})
+        first_avail = prop_avail.get("first_scorer", {})
+        sot_avail = prop_avail.get("shots_on_target", {})
+        assists_avail = prop_avail.get("assists", {})
+        
+        # Build players list if scorer props available
+        players = []
+        if anytime_avail.get("available") or first_avail.get("available"):
+            # Aggregate player data from matches
+            all_players = self._aggregate_player_data(
+                home_matches + away_matches,
+                home_team_name,
+                away_team_name,
+                team_xg_home,
+                team_xg_away,
+            )
+            players = all_players
+        
+        # Build predictions dict with granular availability
+        predictions = {
+            "anytime_scorer": {
+                "available": anytime_avail.get("available", False),
+                "players": [p.to_dict() for p in players] if anytime_avail.get("available") else [],
+                "reason": anytime_avail.get("reason") if not anytime_avail.get("available") else None,
+            },
+            "first_scorer": {
+                "available": first_avail.get("available", False),
+                "players": [p.to_dict() for p in players] if first_avail.get("available") else [],
+                "reason": first_avail.get("reason") if not first_avail.get("available") else None,
+            },
+            "shots_on_target": {
+                "available": sot_avail.get("available", False),
+                "reason": sot_avail.get("reason"),
+            },
+            "assists": {
+                "available": assists_avail.get("available", False),
+                "reason": assists_avail.get("reason"),
+            },
+        }
+        
+        # Build metadata
+        coverage_levels = avail_result.get("coverage_levels", {})
+        metadata = {
+            "coverage_levels": coverage_levels,
+            "data_source": avail_result.get("data_source", "unavailable"),
+        }
+        
+        # Create base MarketAvailability for backward compatibility
+        base_avail = avail_result.get("available", False)
+        sample_size = avail_result.get("sample_size", 0)
+        confidence_str = avail_result.get("confidence", "low")
+        
+        try:
+            confidence = ConfidenceLevel(confidence_str)
+        except ValueError:
+            confidence = ConfidenceLevel.LOW
+        
+        data_source_str = avail_result.get("data_source", "unavailable")
+        try:
+            data_source = DataSource(data_source_str)
+        except ValueError:
+            data_source = DataSource.UNAVAILABLE
+        
+        market_avail = MarketAvailability(
+            available=base_avail,
+            reason="" if base_avail else "Insufficient player data for any props",
+            sample_size=sample_size,
+            confidence=confidence,
+            data_source=data_source,
+        )
+        
         return PlayerPropsPrediction(
             market_type=MarketType.PLAYER_ANYTIME_SCORER,
-            availability=avail,
-            players=[],
+            availability=market_avail,
+            predictions=predictions,
+            players=players,
+            metadata=metadata,
         )
+    
+    def _aggregate_player_data(
+        self,
+        matches: List[Dict[str, Any]],
+        home_team_name: str,
+        away_team_name: str,
+        team_xg_home: float,
+        team_xg_away: float,
+    ) -> List[PlayerProp]:
+        """
+        Aggregate player data from recent matches for prop predictions.
+        
+        Uses roster + signals + events to build player profiles.
+        """
+        if not matches:
+            return []
+        
+        # Collect all unique players
+        player_data: Dict[str, Dict[str, Any]] = {}
+        
+        for match in matches:
+            # Try to get pre-parsed player data
+            players = match.get("players", [])
+            signals = match.get("player_signals", [])
+            events = match.get("player_events", [])
+            
+            # Index by athlete_id
+            for p in players:
+                aid = p.get("athlete_id")
+                if not aid:
+                    continue
+                
+                if aid not in player_data:
+                    player_data[aid] = {
+                        "athlete_id": aid,
+                        "player_name": p.get("player_name", ""),
+                        "team": p.get("team_name", ""),
+                        "position": p.get("position", ""),
+                        "is_starter": p.get("is_starter", False),
+                        "goals": 0,
+                        "signals_count": 0,
+                        "events_count": 0,
+                        "is_goal_leader": False,
+                        "is_shot_leader": False,
+                    }
+                
+                # Aggregate stats
+                player_data[aid]["goals"] += p.get("goals", 0) or 0
+                if p.get("is_goal_leader"):
+                    player_data[aid]["is_goal_leader"] = True
+                if p.get("is_shot_leader"):
+                    player_data[aid]["is_shot_leader"] = True
+                player_data[aid]["signals_count"] += p.get("_signals_count", 0) or 0
+                player_data[aid]["events_count"] += p.get("_events_count", 0) or 0
+            
+            # Also process signals
+            for sig in signals:
+                aid = sig.get("athlete_id")
+                if not aid or aid not in player_data:
+                    continue
+                
+                player_data[aid]["signals_count"] += 1
+                signal_type = sig.get("signal_type", "")
+                if signal_type == "goal_scorer":
+                    player_data[aid]["is_goal_leader"] = True
+                elif signal_type in ("volume_shooter", "shot_accuracy"):
+                    player_data[aid]["is_shot_leader"] = True
+        
+        # Convert to PlayerProp objects
+        props = []
+        for aid, data in player_data.items():
+            # Calculate scorer probability based on signals and goals
+            goal_prob = 0.0
+            if data["is_goal_leader"]:
+                goal_prob = 0.35
+            elif data["is_shot_leader"]:
+                goal_prob = 0.20
+            elif data["goals"] > 0:
+                goal_prob = min(0.15 * data["goals"], 0.50)
+            elif data["signals_count"] > 0:
+                goal_prob = 0.10
+            
+            # Adjust for starter status
+            if data["is_starter"]:
+                goal_prob *= 1.2
+            
+            props.append(PlayerProp(
+                player_id=aid,
+                player_name=data["player_name"],
+                team=data["team"],
+                position=data["position"] if data["position"] else None,
+                is_starter=data["is_starter"],
+                starter_probability=0.8 if data["is_starter"] else 0.3,
+                anytime_scorer_prob=round(goal_prob, 4),
+                first_scorer_prob=round(goal_prob * 0.25, 4),  # Rough approximation
+            ))
+        
+        # Sort by scorer probability
+        props.sort(key=lambda p: p.anytime_scorer_prob or 0, reverse=True)
+        
+        return props[:15]  # Return top 15 players
