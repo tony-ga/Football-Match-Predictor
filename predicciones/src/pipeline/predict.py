@@ -1,7 +1,12 @@
+"""
+Unified football prediction pipeline using ESPN World Cup data with static ratings fallback.
+Integrates derived market datasets (team_match_stats, player_match_stats) for corners,
+cards, shots on target, and player props predictions.
+"""
 import os
 import logging
 from datetime import datetime, UTC
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 
 from ..utils.config_loader import config
 from ..data.feature_builder import MatchFeatureBuilder
@@ -11,6 +16,8 @@ from ..models.lambda_recalibration import LambdaRecalibrator
 from ..models.market_derivation import derive_all_markets
 from ..models.calibration import CalibrationManager
 from ..sanity.sanity_checker import run_sanity_checks
+from ..models.market_models import CornersModel, CardsModel, ShotsModel, PlayerPropsModel
+from ..ingestion.jsonl_loader import TeamMatchStatsLoader, PlayerMatchStatsLoader, MatchEventsLoader
 
 logger = logging.getLogger(__name__)
 
@@ -143,15 +150,223 @@ def _compute_context_modifier(
     return round(max(-0.05, min(0.05, modifier)), 3)
 
 
+def _build_alternative_markets(
+    home_team: str,
+    away_team: str,
+    lambda_h: float,
+    lambda_a: float,
+    team_loader: TeamMatchStatsLoader,
+    player_loader: PlayerMatchStatsLoader,
+    events_loader: MatchEventsLoader,
+) -> Dict[str, Any]:
+    """
+    Build alternative markets (corners, cards, SOT, player props) from derived datasets.
+    
+    Args:
+        home_team: Home team name
+        away_team: Away team name
+        lambda_h: Expected goals home (for player props)
+        lambda_a: Expected goals away (for player props)
+        team_loader: Loader for team match stats
+        player_loader: Loader for player match stats
+        events_loader: Loader for match events
+        
+    Returns:
+        Dict with corners, cards, shots_on_target, player_props markets
+    """
+    # Initialize models
+    corners_model = CornersModel()
+    cards_model = CardsModel()
+    shots_model = ShotsModel()
+    player_model = PlayerPropsModel()
+    
+    # Get team aggregate stats
+    home_stats = team_loader.get_aggregate_stats(home_team, max_matches=10)
+    away_stats = team_loader.get_aggregate_stats(away_team, max_matches=10)
+    
+    # Check data availability
+    has_corners_data = (
+        home_stats.get("matches_with_corners", 0) >= 3 or 
+        away_stats.get("matches_with_corners", 0) >= 3
+    )
+    has_cards_data = (
+        home_stats.get("matches_with_cards", 0) >= 3 or
+        away_stats.get("matches_with_cards", 0) >= 3
+    )
+    has_sot_data = (
+        home_stats.get("matches_with_sot", 0) >= 3 or
+        away_stats.get("matches_with_sot", 0) >= 3
+    )
+    has_events_data = events_loader.has_data()
+    
+    # Build corners market
+    if has_corners_data:
+        home_corners_avg = home_stats.get("corners_avg") or 5.0
+        away_corners_avg = away_stats.get("corners_avg") or 5.0
+        
+        total_corners_pred = corners_model.predict_total_corners(home_corners_avg, away_corners_avg)
+        team_corners_pred = corners_model.predict_team_corners(home_corners_avg, away_corners_avg)
+        more_corners_pred = corners_model.predict_more_corners(home_corners_avg, away_corners_avg)
+        
+        corners_market = {
+            "available": True,
+            "expected_total": total_corners_pred["expected_total"],
+            "total_lines": total_corners_pred["lines"],
+            "team_lines": team_corners_pred,
+            "more_corners": more_corners_pred,
+            "first_corner": {"available": has_events_data} if has_events_data else {"available": False, "reason": "No event sequence data"},
+            "sample_size": home_stats.get("matches_with_corners", 0) + away_stats.get("matches_with_corners", 0),
+        }
+    else:
+        corners_market = {
+            "available": False,
+            "reason": f"Insufficient corner data (home: {home_stats.get('matches_with_corners', 0)}, away: {away_stats.get('matches_with_corners', 0)})",
+        }
+    
+    # Build cards market
+    if has_cards_data:
+        home_cards_avg = home_stats.get("cards_avg") or 2.0
+        away_cards_avg = away_stats.get("cards_avg") or 2.0
+        
+        total_cards_pred = cards_model.predict_total_cards(home_cards_avg, away_cards_avg)
+        team_cards_pred = cards_model.predict_team_cards(home_cards_avg, away_cards_avg)
+        more_cards_pred = cards_model.predict_more_cards(home_cards_avg, away_cards_avg)
+        
+        cards_market = {
+            "available": True,
+            "expected_total": total_cards_pred["expected_total"],
+            "total_lines": total_cards_pred["lines"],
+            "team_lines": team_cards_pred,
+            "more_cards": more_cards_pred,
+            "first_card": {"available": has_events_data} if has_events_data else {"available": False, "reason": "No event sequence data"},
+            "sample_size": home_stats.get("matches_with_cards", 0) + away_stats.get("matches_with_cards", 0),
+        }
+    else:
+        cards_market = {
+            "available": False,
+            "reason": f"Insufficient card data (home: {home_stats.get('matches_with_cards', 0)}, away: {away_stats.get('matches_with_cards', 0)})",
+        }
+    
+    # Build shots on target market
+    if has_sot_data:
+        # Use SOT from team stats - need to compute from raw matches
+        home_matches = team_loader.get_team_matches(home_team, max_matches=10)
+        away_matches = team_loader.get_team_matches(away_team, max_matches=10)
+        
+        home_sot_avg = sum(m.get("shots_on_target") or 0 for m in home_matches if m.get("shots_on_target") is not None) / max(len(home_matches), 1)
+        away_sot_avg = sum(m.get("shots_on_target") or 0 for m in away_matches if m.get("shots_on_target") is not None) / max(len(away_matches), 1)
+        
+        total_sot_pred = shots_model.predict_total_sot(home_sot_avg, away_sot_avg)
+        team_sot_pred = shots_model.predict_team_sot(home_sot_avg, away_sot_avg)
+        
+        shots_market = {
+            "available": True,
+            "expected_total": total_sot_pred["expected_total"],
+            "total_lines": total_sot_pred["lines"],
+            "team_lines": team_sot_pred,
+            "sample_size": home_stats.get("matches_with_sot", 0) + away_stats.get("matches_with_sot", 0),
+        }
+    else:
+        shots_market = {
+            "available": False,
+            "reason": f"Insufficient SOT data (home: {home_stats.get('matches_with_sot', 0)}, away: {away_stats.get('matches_with_sot', 0)})",
+        }
+    
+    # Build player props market
+    home_players = player_loader.get_team_players(home_team, max_matches=10)
+    away_players = player_loader.get_team_players(away_team, max_matches=10)
+    
+    has_player_data = len(home_players) > 0 or len(away_players) > 0
+    
+    if has_player_data:
+        # Get scorer candidates
+        home_scorers = player_loader.get_scorer_candidates(home_team, min_goals=0, max_matches=10)
+        away_scorers = player_loader.get_scorer_candidates(away_team, min_goals=0, max_matches=10)
+        
+        # Build anytime scorer predictions for top candidates
+        anytime_scorers = []
+        for scorers in [home_scorers[:5], away_scorers[:5]]:
+            for player in scorers:
+                pname = player["player_name"]
+                pdata = home_players.get(pname) or away_players.get(pname)
+                if pdata:
+                    prob = player_model.predict_anytime_scorer(pdata, lambda_h if pdata == home_players.get(pname) else lambda_a, 10)
+                    anytime_scorers.append({
+                        "player_name": pname,
+                        "team": home_team if pdata == home_players.get(pname) else away_team,
+                        "probability": prob,
+                        "goals_recent": pdata.get("goals", 0),
+                        "matches_played": pdata.get("matches_played", 0),
+                    })
+        
+        # Sort by probability
+        anytime_scorers.sort(key=lambda x: x["probability"], reverse=True)
+        
+        # First scorer (approximate from anytime)
+        first_scorers = []
+        for scorer in anytime_scorers[:10]:
+            pdata = home_players.get(scorer["player_name"]) or away_players.get(scorer["player_name"])
+            is_starter = pdata.get("starts", 0) > 0 if pdata else False
+            prob = player_model.predict_first_scorer(pdata or {}, scorer["probability"], is_starter)
+            first_scorers.append({
+                "player_name": scorer["player_name"],
+                "team": scorer["team"],
+                "probability": prob,
+            })
+        
+        player_props_market = {
+            "available": True,
+            "anytime_scorer": {
+                "available": len(anytime_scorers) > 0,
+                "top_candidates": anytime_scorers[:10],
+            },
+            "first_scorer": {
+                "available": len(first_scorers) > 0,
+                "top_candidates": first_scorers[:10],
+            },
+            "assists": {"available": False, "reason": "Insufficient assist data for reliable predictions"},
+            "player_shots_on_target": {"available": False, "reason": "Insufficient player-level SOT data"},
+            "coverage_summary": {
+                "home_players_tracked": len(home_players),
+                "away_players_tracked": len(away_players),
+                "home_scorers_identified": len(home_scorers),
+                "away_scorers_identified": len(away_scorers),
+            },
+        }
+    else:
+        player_props_market = {
+            "available": False,
+            "reason": "No player-level data available for either team",
+        }
+    
+    return {
+        "corners": corners_market,
+        "cards": cards_market,
+        "shots_on_target": shots_market,
+        "player_props": player_props_market,
+    }
+
+
 def predict_match_pipeline(
     home_team: str,
     away_team: str,
     match_date: str = None,
     neutral_venue: bool = False,
+    include_markets: bool = True,
     **kwargs  # absorbe refresh_data, api_source, etc. para compatibilidad
 ) -> Dict[str, Any]:
     """
     Unified football prediction pipeline using ESPN World Cup data with static ratings fallback.
+    
+    Args:
+        home_team: Home team name
+        away_team: Away team name
+        match_date: Match date (YYYY-MM-DD), defaults to today
+        neutral_venue: Whether match is at neutral venue
+        include_markets: If True, include alternative markets (corners, cards, SOT, player props)
+        
+    Returns:
+        Dict with match predictions and optional alternative markets
     """
     if match_date is None:
         match_date = datetime.today().strftime("%Y-%m-%d")
@@ -221,8 +436,12 @@ def predict_match_pipeline(
     
     # Load and run Lambda Recalibrator
     recalibrator_path = "output/calibrators/lambda_recalibrator.pkl"
-    recalibrator = LambdaRecalibrator.load(recalibrator_path, config=config)
-    lambda_h, lambda_a = recalibrator.recalibrate(raw_lambda_h, raw_lambda_a)
+    try:
+        recalibrator = LambdaRecalibrator.load(recalibrator_path, config=config)
+        lambda_h, lambda_a = recalibrator.recalibrate(raw_lambda_h, raw_lambda_a)
+    except FileNotFoundError:
+        logger.warning("Lambda recalibrator not found, using raw lambdas")
+        lambda_h, lambda_a = raw_lambda_h, raw_lambda_a
 
     # Calculate score matrix with Cap of 6 goals
     matrix = dc_model.score_matrix(lambda_h, lambda_a)
@@ -242,6 +461,29 @@ def predict_match_pipeline(
     # Step 7: Apply Sanity Checks after calibration
     final_markets = run_sanity_checks(calibrated_markets, lambda_h, lambda_a, config)
 
+    # Step 8: Build alternative markets if requested
+    alternative_markets = {}
+    if include_markets:
+        try:
+            team_loader = TeamMatchStatsLoader()
+            player_loader = PlayerMatchStatsLoader()
+            events_loader = MatchEventsLoader()
+            
+            alternative_markets = _build_alternative_markets(
+                home_team, away_team,
+                lambda_h, lambda_a,
+                team_loader, player_loader, events_loader
+            )
+            logger.info(f"Built alternative markets: corners={alternative_markets.get('corners', {}).get('available')}, cards={alternative_markets.get('cards', {}).get('available')}, sot={alternative_markets.get('shots_on_target', {}).get('available')}, player_props={alternative_markets.get('player_props', {}).get('available')}")
+        except Exception as e:
+            logger.warning(f"Failed to build alternative markets: {e}")
+            alternative_markets = {
+                "corners": {"available": False, "reason": str(e)},
+                "cards": {"available": False, "reason": str(e)},
+                "shots_on_target": {"available": False, "reason": str(e)},
+                "player_props": {"available": False, "reason": str(e)},
+            }
+
     # Determine overall data source
     all_warnings = home_profile.data_warnings + away_profile.data_warnings
     if "espn_world_cup" in home_profile.data_source or "espn_world_cup" in away_profile.data_source:
@@ -258,6 +500,7 @@ def predict_match_pipeline(
     response = {
         "match": f"{home_team} vs {away_team}",
         "predictions": final_markets,
+        "markets": alternative_markets,  # Alternative markets block
         "team_context": {
             "home": {
                 "team": home_team,
