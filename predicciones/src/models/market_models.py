@@ -638,19 +638,30 @@ class PlayerPropsModel:
             goals = pdata.get("goals", 0) or 0
             matches = pdata.get("matches_played", 1) or 1
             shots = pdata.get("shots", 0) or 0
-            minutes = pdata.get("minutes", 0) or 0
+            minutes_raw = pdata.get("minutes", 0) or 0
+            starts = pdata.get("starts", 0) or 0
             position = pdata.get("position", "").lower()
-            is_starter = pdata.get("is_starter", False) or pdata.get("starts", 0) > 0
+            is_starter = pdata.get("is_starter", False) or starts > 0
+            
+            # FIX: Si minutes es None/0 en los datos, estimar basado en starts
+            # Un titular típico juega ~80-90 min, un suplente ~20-30 min
+            if minutes_raw <= 0:
+                # Estimación conservadora: 75 min por start, 25 min por sub appearance
+                subs = max(0, matches - starts)
+                minutes = starts * 75 + subs * 25
+            else:
+                minutes = minutes_raw
             
             # 1. Goals contribution (strongest factor) - share of team's recent goals
             goal_share = goals / total_goals_recent if total_goals_recent > 0 else 1.0 / len(players_data)
             
             # 2. Shots per 90 - indicates involvement in attack
+            # Now uses estimated minutes if actual minutes unavailable
             shots_per_90 = (shots / matches) * (90 / max(minutes, 1)) if minutes > 0 else 0
             # Normalize to [0, 1] range (typical max ~12 shots/90 for very active players)
             shot_factor = min(1.0, shots_per_90 / 10.0)
             
-            # 3. Position weight from hierarchy
+            # 3. Position weight from hierarchy (CRITICAL: enforce offensive hierarchy)
             pos_weight = 0.5  # default
             for key, val in POSITION_WEIGHTS.items():
                 if key in position:
@@ -664,12 +675,13 @@ class PlayerPropsModel:
             playing_time_factor = mins_factor * starter_bonus
             
             # Combine factors into raw lambda score
-            # Weighting: goals (50%), position (25%), shots (15%), playing time (10%)
+            # Weighting: goals (55%), position (25%), shots (12%), playing time (8%)
+            # Increased goals weight, decreased shots (since data is sparse)
             raw_lambda_score = (
-                0.50 * goal_share +
+                0.55 * goal_share +
                 0.25 * pos_weight +
-                0.15 * shot_factor +
-                0.10 * playing_time_factor
+                0.12 * shot_factor +
+                0.08 * playing_time_factor
             )
             
             player_lambdas.append({
@@ -680,7 +692,9 @@ class PlayerPropsModel:
                 "goals_recent": goals,
                 "matches": matches,
                 "minutes": minutes,
+                "minutes_raw": minutes_raw,
                 "is_starter": is_starter,
+                "starts": starts,
                 "shots_per_90": shots_per_90,
             })
         
