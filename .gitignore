@@ -1,1 +1,1 @@
-Nothing should be ignored based on the provided file changes. The modification of 'predicciones/src/pipeline/predict_markets.py' is a source code file and does not require any new ignore rules.
+Nothing should be ignored based on the provided file changes. The modified file 'predicciones/scripts/predict_match.py' is a source code file that should not be added to .gitignore.
