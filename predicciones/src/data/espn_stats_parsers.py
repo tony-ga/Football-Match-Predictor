@@ -3,6 +3,12 @@ ESPN data parsers extension for team and player statistics.
 
 Extends base ESPN parsing to extract detailed stats for corners, cards,
 shots, and player-level data from scoreboard and summary endpoints.
+
+Supports ESPN API shape with:
+- boxscore.teams[].statistics with names like: wonCorners, yellowCards, redCards, 
+  totalShots, shotsOnTarget, foulsCommitted, etc.
+- keyEvents for temporal event extraction (corners, cards, goals)
+- rosters and leaders for player-level data
 """
 from __future__ import annotations
 
@@ -12,13 +18,50 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+# Mapeo de nombres de estadísticas ESPN a nombres internos
+# ESPN usa nombres como "wonCorners", "yellowCards", "totalShots", etc.
+ESPN_TO_INTERNAL_MAP = {
+    # Corners
+    "woncorners": "corners",
+    "cornerkicks": "corners",
+    "corners": "corners",
+    
+    # Cards
+    "yellowcards": "yellow_cards",
+    "redcards": "red_cards",
+    "totalcards": "total_cards",
+    
+    # Shots - orden importa: primero los específicos, luego generales
+    # Nota: "shotsOnTarget" -> "shotsontarget" (sin espacios)
+    "shotsontarget": "shots_on_target",
+    "shotson target": "shots_on_target",
+    "shotson_target": "shots_on_target",
+    "shotsongoal": "shots_on_target",
+    "ongoal": "shots_on_target",
+    "on goal": "shots_on_target",
+    "totalshots": "shots",
+    "shots": "shots",  # fallback
+    "blockedshots": "blocked_shots",
+    "penaltykickshots": "penalty_shots",
+    "penaltykickgoals": "penalty_goals",
+    "shotpct": "shot_percentage",  # no usar para shots count
+    
+    # Other
+    "foulscommitted": "fouls",
+    "fouls": "fouls",
+    "offsides": "offsides",
+    "possessionpct": "possession",
+    "saves": "saves",
+}
+
+
 def extract_team_stats_from_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extract team-level statistics from ESPN summary response.
     
     Looks for stats in multiple locations:
-    - boxscore.teams[].statistics
-    - competitions[0].statistics
+    - boxscore.teams[].statistics (primary)
+    - competitions[0].statistics (fallback)
     
     Returns dict with normalized stat names or None values if not found.
     
@@ -27,6 +70,10 @@ def extract_team_stats_from_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         
     Returns:
         Dict with home_*/away_* prefixed stats
+        
+    Supported stats:
+        - goals, corners, yellow_cards, red_cards, total_cards
+        - shots, shots_on_target, possession, fouls, offsides
     """
     stats = {
         # Basic
@@ -63,7 +110,7 @@ def extract_team_stats_from_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     if not summary:
         return stats
     
-    # Try boxscore first
+    # Try boxscore first (primary source)
     boxscore = summary.get("boxscore", {})
     teams_data = boxscore.get("teams", [])
     
@@ -80,7 +127,7 @@ def extract_team_stats_from_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
             away_stats_raw = team_block.get("statistics", [])
             stats["away_goals"] = _parse_int(team_block.get("score"))
     
-    # Parse statistics arrays
+    # Parse statistics arrays using the mapping
     for stat_list, is_home in [(home_stats_raw, True), (away_stats_raw, False)]:
         if not stat_list:
             continue
@@ -95,35 +142,24 @@ def extract_team_stats_from_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
             display_value = stat.get("displayValue") or stat.get("value")
             value = _parse_float(display_value)
             
-            # Map stat names
-            if "corner" in name:
-                stats[f"{prefix}_corners"] = value
-            elif "yellow" in name and "card" in name:
-                stats[f"{prefix}_yellow_cards"] = value
-            elif "red" in name and "card" in name:
-                stats[f"{prefix}_red_cards"] = value
-            elif "card" in name and "total" in name:
-                stats[f"{prefix}_total_cards"] = value
-            elif "shot" in name and "on target" in name:
-                stats[f"{prefix}_shots_on_target"] = value
-            elif "shot" in name and "goal" not in name:
-                stats[f"{prefix}_shots"] = value
-            elif "possession" in name or "posesión" in name:
-                stats[f"{prefix}_possession"] = value
-            elif "foul" in name:
-                stats[f"{prefix}_fouls"] = value
-            elif "offside" in name:
-                stats[f"{prefix}_offsides"] = value
+            # Use mapping first
+            mapped_name = ESPN_TO_INTERNAL_MAP.get(name)
+            
+            if mapped_name:
+                stats[f"{prefix}_{mapped_name}"] = value
+            else:
+                # Fallback to pattern matching for unknown names
+                _apply_pattern_matching(stats, prefix, name, value)
     
-    # Calculate total cards if yellow/red available but total not
+    # Calculate total cards if not explicitly provided
     for prefix in ["home", "away"]:
         if stats[f"{prefix}_total_cards"] is None:
-            yellow = stats[f"{prefix}_yellow_cards"] or 0
-            red = stats[f"{prefix}_red_cards"] or 0
-            if yellow > 0 or red > 0:
-                stats[f"{prefix}_total_cards"] = yellow + red
+            yellow = stats[f"{prefix}_yellow_cards"]
+            red = stats[f"{prefix}_red_cards"]
+            if yellow is not None or red is not None:
+                stats[f"{prefix}_total_cards"] = (yellow or 0) + (red or 0)
     
-    # Fallback to competitions[0].statistics
+    # Fallback to competitions[0].statistics if boxscore didn't have data
     competitions = summary.get("competitions", [])
     if competitions and len(competitions) > 0:
         comp_stats = _extract_stats_from_competition_block(competitions[0])
@@ -468,6 +504,47 @@ def extract_events_from_summary(summary: Dict[str, Any]) -> List[Dict[str, Any]]
     events.sort(key=sort_key)
     
     return events
+
+
+def _apply_pattern_matching(stats: Dict[str, Any], prefix: str, name: str, value: Optional[float]) -> None:
+    """
+    Fallback pattern matching for stat names not in the explicit map.
+    
+    Uses substring matching to identify common stat categories.
+    Updates stats dict in place.
+    
+    IMPORTANT: Skip percentage stats (shotpct, passpct, etc.) to avoid 
+    overwriting count values with percentages.
+    """
+    if value is None:
+        return
+    
+    # Skip percentage stats - they should not be used as counts
+    if "pct" in name or "percentage" in name or "%" in name:
+        return
+    
+    # Corners
+    if "corner" in name:
+        stats[f"{prefix}_corners"] = value
+    # Cards
+    elif "yellow" in name and "card" in name:
+        stats[f"{prefix}_yellow_cards"] = value
+    elif "red" in name and "card" in name:
+        stats[f"{prefix}_red_cards"] = value
+    elif "card" in name and "total" in name:
+        stats[f"{prefix}_total_cards"] = value
+    # Shots - only match total shots, not percentages
+    elif "shot" in name and "on target" in name:
+        stats[f"{prefix}_shots_on_target"] = value
+    elif name == "shots" or (name.endswith("shots") and "blocked" not in name and "penalty" not in name):
+        stats[f"{prefix}_shots"] = value
+    # Other
+    elif "possession" in name or "posesión" in name:
+        stats[f"{prefix}_possession"] = value
+    elif "foul" in name:
+        stats[f"{prefix}_fouls"] = value
+    elif "offside" in name:
+        stats[f"{prefix}_offsides"] = value
 
 
 def _parse_float(value: Any) -> Optional[float]:
