@@ -462,24 +462,61 @@ class EspnWorldCupClient:
         # ESPN puede tener múltiples bookmakers, tomar el primero
         if isinstance(odds_data, list) and len(odds_data) > 0:
             first_odds = odds_data[0]
-            details = first_odds.get("details", [])
+            if first_odds is None or not isinstance(first_odds, dict):
+                return odds
             
-            for detail in details:
-                name = detail.get("name", "").lower()
-                value = detail.get("value") or detail.get("decimalValue")
-                value = self._parse_float(value)
+            # Intentar extraer desde moneyline (formato moderno de ESPN)
+            moneyline = first_odds.get("moneyline", {})
+            if moneyline:
+                home_ml = moneyline.get("home", {})
+                away_ml = moneyline.get("away", {})
+                draw_ml = moneyline.get("draw", {})
                 
-                if value is None:
-                    continue
+                # Extraer odds actuales (pueden ser strings como "+155" o "-200")
+                home_val = home_ml.get("current", {}).get("odds")
+                away_val = away_ml.get("current", {}).get("odds")
+                draw_val = draw_ml.get("current", {}).get("odds")
                 
-                if "home" in name or "local" in name:
-                    odds["home"] = value
-                elif "draw" in name or "tie" in name or "empate" in name:
-                    odds["draw"] = value
-                elif "away" in name or "visitor" in name or "visitante" in name:
-                    odds["away"] = value
+                if home_val:
+                    odds["home"] = self._parse_moneyline_to_decimal(home_val)
+                if away_val:
+                    odds["away"] = self._parse_moneyline_to_decimal(away_val)
+                if draw_val:
+                    odds["draw"] = self._parse_moneyline_to_decimal(draw_val)
+            
+            # Fallback al formato antiguo con details
+            if odds["home"] is None:
+                details = first_odds.get("details", [])
+                if details and isinstance(details, list):
+                    for detail in details:
+                        if not isinstance(detail, dict):
+                            continue
+                        name = detail.get("name", "").lower()
+                        value = detail.get("value") or detail.get("decimalValue")
+                        value = self._parse_float(value)
+                        
+                        if value is None:
+                            continue
+                        
+                        if "home" in name or "local" in name:
+                            odds["home"] = value
+                        elif "draw" in name or "tie" in name or "empate" in name:
+                            odds["draw"] = value
+                        elif "away" in name or "visitor" in name or "visitante" in name:
+                            odds["away"] = value
         
         return odds
+    
+    def _parse_moneyline_to_decimal(self, ml_value: str) -> Optional[float]:
+        """Convierte moneyline americano (+155, -200) a decimal."""
+        try:
+            val = int(ml_value.replace("+", ""))
+            if val > 0:
+                return round((val / 100) + 1, 2)
+            else:
+                return round((100 / abs(val)) + 1, 2)
+        except (ValueError, TypeError):
+            return None
     
     def _parse_float(self, value: Any) -> Optional[float]:
         """Parsea un valor a float, retornando None si falla."""
@@ -521,32 +558,44 @@ class EspnWorldCupClient:
     def get_recent_team_matches(
         self,
         team_name: str,
-        dates: Optional[str] = None,
-        limit: int = 200
+        days_back: int = 60,
+        max_matches: int = 8,
+        limit_per_request: int = 500
     ) -> List[Dict[str, Any]]:
         """
-        Trae scoreboard y filtra los eventos donde participe el equipo.
-        Devuelve una lista normalizada de partidos.
+        Busca partidos recientes de un equipo en una ventana temporal.
         
-        Si ESPN no trae stats suficientes en scoreboard, intenta enriquecer
-        partidos completados con get_summary(event_id).
+        Consulta el scoreboard de ESPN con un rango de fechas hacia atrás
+        y filtra los eventos donde participe el equipo especificado.
         
         Args:
             team_name: Nombre del equipo (se normaliza automáticamente)
-            dates: Rango de fechas opcional
-            limit: Límite de eventos
+            days_back: Días hacia atrás para buscar (default: 60)
+            max_matches: Máximo número de partidos a retornar (default: 8)
+            limit_per_request: Límite de eventos por request (default: 500)
         
         Returns:
-            Lista de partidos normalizados donde participa el equipo.
+            Lista de partidos normalizados donde participa el equipo,
+            ordenados del más reciente al más antiguo. Nunca devuelve None;
+            devuelve [] si no hay resultados.
         """
+        import datetime
+        
         normalized_name = self.normalize_team_name(team_name)
         logger.info(f"Buscando partidos recientes para: {team_name} (normalizado: {normalized_name})")
         
-        scoreboard = self.get_scoreboard(dates=dates, limit=limit)
+        # Calcular rango de fechas
+        today = datetime.date.today()
+        start_date = today - datetime.timedelta(days=days_back)
+        date_range = f"{start_date.strftime('%Y%m%d')}-{today.strftime('%Y%m%d')}"
+        
+        logger.debug(f"Consultando ESPN con rango de fechas: {date_range}")
+        
+        scoreboard = self.get_scoreboard(dates=date_range, limit=limit_per_request)
         events = scoreboard.get("events", [])
         
         if not events:
-            logger.warning(f"No events returned from ESPN for {team_name}")
+            logger.warning(f"No events returned from ESPN for {team_name} in last {days_back} days")
             return []
         
         team_matches = []
@@ -591,6 +640,13 @@ class EspnWorldCupClient:
                         norm["stats"] = stats
             
             team_matches.append(norm)
+            
+            # Limitar número de partidos
+            if len(team_matches) >= max_matches:
+                break
         
-        logger.info(f"Encontrados {len(team_matches)} partidos para {team_name}")
+        # Ordenar por fecha (más reciente primero)
+        team_matches.sort(key=lambda x: x.get("date", ""), reverse=True)
+        
+        logger.info(f"Encontrados {len(team_matches)} partidos para {team_name} en últimos {days_back} días")
         return team_matches
