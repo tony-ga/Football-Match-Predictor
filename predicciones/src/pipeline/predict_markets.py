@@ -31,6 +31,52 @@ from ..models.market_models import (
 logger = logging.getLogger(__name__)
 
 
+def predict_markets_for_match(
+    home_team: str,
+    away_team: str,
+    event_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Convenience function to predict markets for a match given team names.
+    
+    Fetches recent matches from ESPN and computes market predictions.
+    Returns a dict with all market predictions formatted for JSON output.
+    """
+    from ..data.espn_client_v2 import EspnClient
+    
+    client = EspnClient()
+    
+    # Fetch recent matches for both teams using get_team_schedule
+    home_matches = []
+    away_matches = []
+    
+    try:
+        home_schedule = client.get_team_schedule(home_team, limit=10)
+        if home_schedule and "events" in home_schedule:
+            home_matches = home_schedule["events"]
+    except Exception:
+        pass
+    
+    try:
+        away_schedule = client.get_team_schedule(away_team, limit=10)
+        if away_schedule and "events" in away_schedule:
+            away_matches = away_schedule["events"]
+    except Exception:
+        pass
+    
+    predictor = MarketsPredictor()
+    result = predictor.predict_markets(
+        home_recent_matches=home_matches,
+        away_recent_matches=away_matches,
+        home_team_name=home_team,
+        away_team_name=away_team,
+        team_xg_home=1.5,  # Default, could be fetched from main pipeline
+        team_xg_away=1.5,
+    )
+    
+    return result.to_dict()
+
+
 class MarketsPredictor:
     """
     Main predictor for alternative markets.
