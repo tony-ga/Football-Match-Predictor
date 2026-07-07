@@ -12,9 +12,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,6 +37,58 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# PATH CONSTANTS
+# =============================================================================
+ROOT_DIR = Path(__file__).resolve().parents[2]
+DERIVED_DIR = ROOT_DIR / "data" / "derived"
+CACHE_DIR = ROOT_DIR / "data" / "cache" / "espn"
+
+# Ensure directories exist
+DERIVED_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# =============================================================================
+# WRITER HELPERS
+# =============================================================================
+def write_jsonl(path: Path, rows: List[Dict[str, Any]], create_empty: bool = True) -> int:
+    """
+    Write list of dicts to JSONL file.
+    
+    Args:
+        path: Output file path
+        rows: List of dict records to write
+        create_empty: If True, create empty file when rows is empty.
+                     If False, skip file creation when rows is empty.
+    
+    Returns:
+        Number of rows written (0 if skipped)
+    """
+    # Ensure parent directory exists
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if not rows:
+        if create_empty:
+            # Create empty file
+            with open(path, "w", encoding="utf-8") as f:
+                pass
+            logger.info(f"Created empty file: {path}")
+            return 0
+        else:
+            # Skip file creation
+            logger.info(f"Skipping file creation (0 rows): {path}")
+            return 0
+    
+    # Write rows
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    
+    logger.info(f"Wrote {len(rows)} rows to {path}")
+    return len(rows)
+
+
 class MarketDatasetBuilder:
     """
     Builds market prediction datasets from ESPN data.
@@ -55,6 +108,11 @@ class MarketDatasetBuilder:
         self.matches_with_cards = 0
         self.matches_with_sot = 0
         self.matches_with_players = 0
+        
+        # Accumulators for batch writing
+        self.team_rows: List[Dict[str, Any]] = []
+        self.player_rows: List[Dict[str, Any]] = []
+        self.event_rows: List[Dict[str, Any]] = []
     
     def build_dataset(
         self,
@@ -77,7 +135,7 @@ class MarketDatasetBuilder:
         """
         # Determine date range
         if days_back is not None:
-            end = datetime.utcnow().date()
+            end = datetime.now(UTC).date()
             start = end - timedelta(days=days_back)
             date_range = f"{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}"
             logger.info(f"Building dataset for last {days_back} days: {date_range}")
@@ -87,7 +145,7 @@ class MarketDatasetBuilder:
         else:
             # Default: last 90 days
             days_back = 90
-            end = datetime.utcnow().date()
+            end = datetime.now(UTC).date()
             start = end - timedelta(days=days_back)
             date_range = f"{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}"
             logger.info(f"Using default date range: last {days_back} days")
@@ -143,6 +201,9 @@ class MarketDatasetBuilder:
         logger.info(f"Matches with player stats: {self.matches_with_players}")
         logger.info("=" * 50)
         
+        # Write all accumulated data to files
+        self._write_all_data()
+        
         return {
             "total_matches": self.matches_processed,
             "with_corners": self.matches_with_corners,
@@ -150,6 +211,28 @@ class MarketDatasetBuilder:
             "with_sot": self.matches_with_sot,
             "with_players": self.matches_with_players,
         }
+    
+    def _write_all_data(self) -> None:
+        """Write all accumulated data to derived files."""
+        # Team match stats
+        team_path = DERIVED_DIR / "team_match_stats.jsonl"
+        team_count = write_jsonl(team_path, self.team_rows, create_empty=True)
+        
+        # Player match stats
+        player_path = DERIVED_DIR / "player_match_stats.jsonl"
+        player_count = write_jsonl(player_path, self.player_rows, create_empty=True)
+        
+        # Match events
+        event_path = DERIVED_DIR / "match_events.jsonl"
+        event_count = write_jsonl(event_path, self.event_rows, create_empty=True)
+        
+        logger.info("=" * 50)
+        logger.info("Data Files Written")
+        logger.info(f"  - {team_path} ({team_count} rows)")
+        logger.info(f"  - {player_path} ({player_count} rows)")
+        logger.info(f"  - {event_path} ({event_count} rows)")
+        logger.info(f"  - {CACHE_DIR}/*.json (raw API responses)")
+        logger.info("=" * 50)
     
     def _process_match(self, event: Dict[str, Any], summary: Dict[str, Any]) -> None:
         """Process a single match and save derived stats."""
@@ -236,8 +319,8 @@ class MarketDatasetBuilder:
             "away_fouls": team_stats["away_fouls"],
         }
         
-        # Save match stats
-        self.cache_manager.append_derived_match_stats(match_stats)
+        # Accumulate for batch writing (instead of appending directly to file)
+        self.team_rows.append(match_stats)
         self.matches_processed += 1
         
         if has_corners:
@@ -247,7 +330,7 @@ class MarketDatasetBuilder:
         if has_sot:
             self.matches_with_sot += 1
         
-        # Extract and save player stats
+        # Extract and accumulate player stats
         players = extract_player_stats_from_summary(summary)
         if players:
             for player in players:
@@ -268,11 +351,11 @@ class MarketDatasetBuilder:
                     "red_cards": player["red_cards"],
                     "total_cards": player["total_cards"],
                 }
-                self.cache_manager.append_derived_player_stats(player_record)
+                self.player_rows.append(player_record)
             
             self.matches_with_players += 1
         
-        # Extract events (for first/last corner/card analysis)
+        # Extract and accumulate events (for first/last corner/card analysis)
         events_list = extract_events_from_summary(summary)
         if events_list:
             events_record = {
@@ -280,10 +363,7 @@ class MarketDatasetBuilder:
                 "date": event.get("date", ""),
                 "events": events_list,
             }
-            self.cache_manager.append_derived_match_stats(
-                events_record,
-                filename="match_events.jsonl",
-            )
+            self.event_rows.append(events_record)
 
 
 def main():
@@ -340,11 +420,35 @@ def main():
     print(f"Matches with SOT data: {stats['with_sot']} ({stats['with_sot']/max(stats['total_matches'],1)*100:.1f}%)")
     print(f"Matches with player stats: {stats['with_players']} ({stats['with_players']/max(stats['total_matches'],1)*100:.1f}%)")
     print("=" * 50)
+    
+    # Print accurate file status
     print(f"\nData saved to:")
-    print(f"  - data/derived/team_match_stats.jsonl")
-    print(f"  - data/derived/player_match_stats.jsonl")
-    print(f"  - data/derived/match_events.jsonl")
-    print(f"  - data/cache/espn/*.json (raw API responses)")
+    team_file = DERIVED_DIR / "team_match_stats.jsonl"
+    player_file = DERIVED_DIR / "player_match_stats.jsonl"
+    event_file = DERIVED_DIR / "match_events.jsonl"
+    
+    if team_file.exists():
+        with open(team_file, "r") as f:
+            team_rows = sum(1 for _ in f)
+        print(f"  - {team_file.relative_to(ROOT_DIR)} ({team_rows} rows)")
+    else:
+        print(f"  - {team_file.relative_to(ROOT_DIR)} (not created, 0 rows)")
+    
+    if player_file.exists():
+        with open(player_file, "r") as f:
+            player_rows = sum(1 for _ in f)
+        print(f"  - {player_file.relative_to(ROOT_DIR)} ({player_rows} rows)")
+    else:
+        print(f"  - {player_file.relative_to(ROOT_DIR)} (not created, 0 rows)")
+    
+    if event_file.exists():
+        with open(event_file, "r") as f:
+            event_rows = sum(1 for _ in f)
+        print(f"  - {event_file.relative_to(ROOT_DIR)} ({event_rows} rows)")
+    else:
+        print(f"  - {event_file.relative_to(ROOT_DIR)} (not created, 0 rows)")
+    
+    print(f"  - {CACHE_DIR.relative_to(ROOT_DIR)}/*.json (raw API responses)")
 
 
 if __name__ == "__main__":
