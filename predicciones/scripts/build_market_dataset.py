@@ -29,6 +29,7 @@ from src.data.espn_stats_parsers import (
     extract_player_stats_from_summary,
     extract_events_from_summary,
 )
+from src.utils.config_paths import DERIVED_DIR, ESPN_CACHE_DIR, PROJECT_ROOT
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,15 +39,11 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# PATH CONSTANTS
+# PATH CONSTANTS (from config_paths for canonical paths)
 # =============================================================================
-ROOT_DIR = Path(__file__).resolve().parents[2]
-DERIVED_DIR = ROOT_DIR / "data" / "derived"
-CACHE_DIR = ROOT_DIR / "data" / "cache" / "espn"
-
-# Ensure directories exist
-DERIVED_DIR.mkdir(parents=True, exist_ok=True)
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+# DERIVED_DIR and CACHE_DIR are now imported from config_paths
+# This ensures all parts of the project use the same canonical locations
+CACHE_DIR = ESPN_CACHE_DIR
 
 
 # =============================================================================
@@ -427,28 +424,57 @@ def main():
     player_file = DERIVED_DIR / "player_match_stats.jsonl"
     event_file = DERIVED_DIR / "match_events.jsonl"
     
+    # Use PROJECT_ROOT for relative path calculations
     if team_file.exists():
         with open(team_file, "r") as f:
             team_rows = sum(1 for _ in f)
-        print(f"  - {team_file.relative_to(ROOT_DIR)} ({team_rows} rows)")
+        try:
+            rel_path = team_file.relative_to(PROJECT_ROOT)
+        except ValueError:
+            rel_path = team_file
+        print(f"  - {rel_path} ({team_rows} rows)")
     else:
-        print(f"  - {team_file.relative_to(ROOT_DIR)} (not created, 0 rows)")
+        try:
+            rel_path = team_file.relative_to(PROJECT_ROOT)
+        except ValueError:
+            rel_path = team_file
+        print(f"  - {rel_path} (not created, 0 rows)")
     
     if player_file.exists():
         with open(player_file, "r") as f:
             player_rows = sum(1 for _ in f)
-        print(f"  - {player_file.relative_to(ROOT_DIR)} ({player_rows} rows)")
+        try:
+            rel_path = player_file.relative_to(PROJECT_ROOT)
+        except ValueError:
+            rel_path = player_file
+        print(f"  - {rel_path} ({player_rows} rows)")
     else:
-        print(f"  - {player_file.relative_to(ROOT_DIR)} (not created, 0 rows)")
+        try:
+            rel_path = player_file.relative_to(PROJECT_ROOT)
+        except ValueError:
+            rel_path = player_file
+        print(f"  - {rel_path} (not created, 0 rows)")
     
     if event_file.exists():
         with open(event_file, "r") as f:
             event_rows = sum(1 for _ in f)
-        print(f"  - {event_file.relative_to(ROOT_DIR)} ({event_rows} rows)")
+        try:
+            rel_path = event_file.relative_to(PROJECT_ROOT)
+        except ValueError:
+            rel_path = event_file
+        print(f"  - {rel_path} ({event_rows} rows)")
     else:
-        print(f"  - {event_file.relative_to(ROOT_DIR)} (not created, 0 rows)")
+        try:
+            rel_path = event_file.relative_to(PROJECT_ROOT)
+        except ValueError:
+            rel_path = event_file
+        print(f"  - {rel_path} (not created, 0 rows)")
     
-    print(f"  - {CACHE_DIR.relative_to(ROOT_DIR)}/*.json (raw API responses)")
+    try:
+        cache_rel = CACHE_DIR.relative_to(PROJECT_ROOT)
+    except ValueError:
+        cache_rel = CACHE_DIR
+    print(f"  - {cache_rel}/*.json (raw API responses)")
 
 
 if __name__ == "__main__":
