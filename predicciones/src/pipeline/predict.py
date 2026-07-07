@@ -199,14 +199,34 @@ def _build_alternative_markets(
     )
     has_events_data = events_loader.has_data()
     
-    # Build corners market
+    # Get sample sizes for regularization
+    home_corners_ss = home_stats.get("matches_with_corners", 0)
+    away_corners_ss = away_stats.get("matches_with_corners", 0)
+    home_cards_ss = home_stats.get("matches_with_cards", 0)
+    away_cards_ss = away_stats.get("matches_with_cards", 0)
+    
+    # Build corners market with regularization and xG coupling
     if has_corners_data:
         home_corners_avg = home_stats.get("corners_avg") or 5.0
         away_corners_avg = away_stats.get("corners_avg") or 5.0
         
-        total_corners_pred = corners_model.predict_total_corners(home_corners_avg, away_corners_avg)
-        team_corners_pred = corners_model.predict_team_corners(home_corners_avg, away_corners_avg)
-        more_corners_pred = corners_model.predict_more_corners(home_corners_avg, away_corners_avg)
+        total_corners_pred = corners_model.predict_total_corners(
+            home_corners_avg, away_corners_avg,
+            home_sample_size=home_corners_ss,
+            away_sample_size=away_corners_ss,
+            home_xg=lambda_h,
+            away_xg=lambda_a,
+        )
+        team_corners_pred = corners_model.predict_team_corners(
+            home_corners_avg, away_corners_avg,
+            home_sample_size=home_corners_ss,
+            away_sample_size=away_corners_ss,
+        )
+        more_corners_pred = corners_model.predict_more_corners(
+            home_corners_avg, away_corners_avg,
+            home_sample_size=home_corners_ss,
+            away_sample_size=away_corners_ss,
+        )
         
         corners_market = {
             "available": True,
@@ -215,22 +235,37 @@ def _build_alternative_markets(
             "team_lines": team_corners_pred,
             "more_corners": more_corners_pred,
             "first_corner": {"available": has_events_data} if has_events_data else {"available": False, "reason": "No event sequence data"},
-            "sample_size": home_stats.get("matches_with_corners", 0) + away_stats.get("matches_with_corners", 0),
+            "sample_size": home_corners_ss + away_corners_ss,
+            "effective_sample_size": total_corners_pred.get("effective_sample_size", home_corners_ss + away_corners_ss),
         }
     else:
         corners_market = {
             "available": False,
-            "reason": f"Insufficient corner data (home: {home_stats.get('matches_with_corners', 0)}, away: {away_stats.get('matches_with_corners', 0)})",
+            "reason": f"Insufficient corner data (home: {home_corners_ss}, away: {away_corners_ss})",
         }
     
-    # Build cards market
+    # Build cards market with regularization and xG coupling
     if has_cards_data:
         home_cards_avg = home_stats.get("cards_avg") or 2.0
         away_cards_avg = away_stats.get("cards_avg") or 2.0
         
-        total_cards_pred = cards_model.predict_total_cards(home_cards_avg, away_cards_avg)
-        team_cards_pred = cards_model.predict_team_cards(home_cards_avg, away_cards_avg)
-        more_cards_pred = cards_model.predict_more_cards(home_cards_avg, away_cards_avg)
+        total_cards_pred = cards_model.predict_total_cards(
+            home_cards_avg, away_cards_avg,
+            home_sample_size=home_cards_ss,
+            away_sample_size=away_cards_ss,
+            home_xg=lambda_h,
+            away_xg=lambda_a,
+        )
+        team_cards_pred = cards_model.predict_team_cards(
+            home_cards_avg, away_cards_avg,
+            home_sample_size=home_cards_ss,
+            away_sample_size=away_cards_ss,
+        )
+        more_cards_pred = cards_model.predict_more_cards(
+            home_cards_avg, away_cards_avg,
+            home_sample_size=home_cards_ss,
+            away_sample_size=away_cards_ss,
+        )
         
         cards_market = {
             "available": True,
@@ -239,12 +274,13 @@ def _build_alternative_markets(
             "team_lines": team_cards_pred,
             "more_cards": more_cards_pred,
             "first_card": {"available": has_events_data} if has_events_data else {"available": False, "reason": "No event sequence data"},
-            "sample_size": home_stats.get("matches_with_cards", 0) + away_stats.get("matches_with_cards", 0),
+            "sample_size": home_cards_ss + away_cards_ss,
+            "effective_sample_size": total_cards_pred.get("effective_sample_size", home_cards_ss + away_cards_ss),
         }
     else:
         cards_market = {
             "available": False,
-            "reason": f"Insufficient card data (home: {home_stats.get('matches_with_cards', 0)}, away: {away_stats.get('matches_with_cards', 0)})",
+            "reason": f"Insufficient card data (home: {home_cards_ss}, away: {away_cards_ss})",
         }
     
     # Build shots on target market
@@ -272,57 +308,84 @@ def _build_alternative_markets(
             "reason": f"Insufficient SOT data (home: {home_stats.get('matches_with_sot', 0)}, away: {away_stats.get('matches_with_sot', 0)})",
         }
     
-    # Build player props market
+    # Build player props market with proper normalization
     home_players = player_loader.get_team_players(home_team, max_matches=10)
     away_players = player_loader.get_team_players(away_team, max_matches=10)
     
     has_player_data = len(home_players) > 0 or len(away_players) > 0
     
     if has_player_data:
-        # Get scorer candidates
+        # Get scorer candidates for both teams
         home_scorers = player_loader.get_scorer_candidates(home_team, min_goals=0, max_matches=10)
         away_scorers = player_loader.get_scorer_candidates(away_team, min_goals=0, max_matches=10)
         
-        # Build anytime scorer predictions for top candidates
-        anytime_scorers = []
-        for scorers in [home_scorers[:5], away_scorers[:5]]:
-            for player in scorers:
-                pname = player["player_name"]
-                pdata = home_players.get(pname) or away_players.get(pname)
-                if pdata:
-                    prob = player_model.predict_anytime_scorer(pdata, lambda_h if pdata == home_players.get(pname) else lambda_a, 10)
-                    anytime_scorers.append({
-                        "player_name": pname,
-                        "team": home_team if pdata == home_players.get(pname) else away_team,
-                        "probability": prob,
-                        "goals_recent": pdata.get("goals", 0),
-                        "matches_played": pdata.get("matches_played", 0),
-                    })
+        # Build player data lists for normalized prediction
+        home_players_list = []
+        for scorer in home_scorers[:8]:
+            pname = scorer["player_name"]
+            pdata = home_players.get(pname)
+            if pdata:
+                pdata["player_name"] = pname
+                pdata["team"] = home_team
+                home_players_list.append(pdata)
         
-        # Sort by probability
+        away_players_list = []
+        for scorer in away_scorers[:8]:
+            pname = scorer["player_name"]
+            pdata = away_players.get(pname)
+            if pdata:
+                pdata["player_name"] = pname
+                pdata["team"] = away_team
+                away_players_list.append(pdata)
+        
+        # Use normalized anytime scorer prediction (sum <= team_xg)
+        home_anytime = player_model.predict_anytime_scorer_normalized(
+            home_players_list, lambda_h, team_total_shots=None
+        )
+        away_anytime = player_model.predict_anytime_scorer_normalized(
+            away_players_list, lambda_a, team_total_shots=None
+        )
+        
+        # Combine and sort
+        anytime_scorers = home_anytime + away_anytime
         anytime_scorers.sort(key=lambda x: x["probability"], reverse=True)
         
-        # First scorer (approximate from anytime)
-        first_scorers = []
-        for scorer in anytime_scorers[:10]:
-            pdata = home_players.get(scorer["player_name"]) or away_players.get(scorer["player_name"])
-            is_starter = pdata.get("starts", 0) > 0 if pdata else False
-            prob = player_model.predict_first_scorer(pdata or {}, scorer["probability"], is_starter)
-            first_scorers.append({
-                "player_name": scorer["player_name"],
-                "team": scorer["team"],
-                "probability": prob,
-            })
+        # Use normalized first scorer prediction (sum + P(no goal) = 1)
+        # For first scorer, we need to consider both teams together
+        all_anytime_for_first = home_anytime + away_anytime
+        total_xg = lambda_h + lambda_a
+        
+        first_scorers = player_model.predict_first_scorer_normalized(
+            all_anytime_for_first, total_xg
+        )
+        
+        # Validation: check probability sums
+        anytime_sum_home = sum(p["probability"] for p in home_anytime)
+        anytime_sum_away = sum(p["probability"] for p in away_anytime)
+        first_scorer_sum = sum(p["probability"] for p in first_scorers if p["player_name"] != "[NO GOAL]")
+        
+        logger.info(f"Player props validation: anytime_home_sum={anytime_sum_home:.3f} (λ_h={lambda_h:.2f}), anytime_away_sum={anytime_sum_away:.3f} (λ_a={lambda_a:.2f}), first_scorer_sum={first_scorer_sum:.3f}")
         
         player_props_market = {
             "available": True,
             "anytime_scorer": {
                 "available": len(anytime_scorers) > 0,
                 "top_candidates": anytime_scorers[:10],
+                "validation": {
+                    "home_anytime_sum": round(anytime_sum_home, 4),
+                    "away_anytime_sum": round(anytime_sum_away, 4),
+                    "home_lambda": round(lambda_h, 2),
+                    "away_lambda": round(lambda_a, 2),
+                },
             },
             "first_scorer": {
                 "available": len(first_scorers) > 0,
-                "top_candidates": first_scorers[:10],
+                "top_candidates": [p for p in first_scorers if p["player_name"] != "[NO GOAL]"][:10],
+                "no_goal_probability": next((p["probability"] for p in first_scorers if p["player_name"] == "[NO GOAL]"), None),
+                "validation": {
+                    "scorer_sum": round(first_scorer_sum, 4),
+                    "total_with_no_goal": round(sum(p["probability"] for p in first_scorers), 4),
+                },
             },
             "assists": {"available": False, "reason": "Insufficient assist data for reliable predictions"},
             "player_shots_on_target": {"available": False, "reason": "Insufficient player-level SOT data"},

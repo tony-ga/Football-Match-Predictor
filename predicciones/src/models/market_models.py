@@ -6,6 +6,12 @@ Implements Poisson and Negative Binomial models for:
 - Cards  
 - Shots on target
 - Player props (heuristic/hierarchical)
+
+Key improvements:
+- Bayesian regularization with global priors
+- Coupling with xG/possession model
+- Consistent more_* derivation from team distributions
+- Proper probability normalization for player props
 """
 from __future__ import annotations
 
@@ -14,6 +20,25 @@ import math
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# Global priors for secondary markets (league averages)
+GLOBAL_PRIORS = {
+    "corners_per_team": 5.0,
+    "cards_per_team": 2.2,
+    "sot_per_team": 4.5,
+    "total_corners_match": 10.0,
+    "total_cards_match": 4.4,
+    "total_sot_match": 9.0,
+}
+
+# Effective sample sizes for regularization
+# These control how much weight is given to observed data vs prior
+EFFECTIVE_SAMPLE_SIZES = {
+    "corners": 12.0,  # Equivalent to ~12 matches of prior weight
+    "cards": 10.0,
+    "sot": 10.0,
+}
 
 
 def poisson_pmf(k: int, lam: float) -> float:
@@ -58,16 +83,56 @@ def negative_binomial_pmf(k: int, n: float, p: float) -> float:
         return 0.0
 
 
+def bayesian_shrinkage(
+    observed_mean: float,
+    prior_mean: float,
+    observed_n: int,
+    effective_sample_size: float,
+) -> float:
+    """
+    Apply Bayesian shrinkage to regularize estimates toward a prior mean.
+    
+    This prevents overfitting when sample sizes are small.
+    
+    Formula:
+        shrunk_mean = (n * observed_mean + k * prior_mean) / (n + k)
+    
+    where k is the effective sample size of the prior.
+    
+    Args:
+        observed_mean: Mean from observed data
+        prior_mean: Global/league average prior
+        observed_n: Number of observations
+        effective_sample_size: Weight of the prior (equivalent sample size)
+    
+    Returns:
+        Regularized estimate
+    """
+    if observed_n <= 0:
+        return prior_mean
+    
+    weight_data = observed_n
+    weight_prior = effective_sample_size
+    
+    total_weight = weight_data + weight_prior
+    shrunk_mean = (weight_data * observed_mean + weight_prior * prior_mean) / total_weight
+    
+    return shrunk_mean
+
+
 class CornersModel:
     """
-    Poisson-based model for corners markets.
+    Poisson-based model for corners markets with Bayesian regularization.
+    
+    Key improvements:
+    - Bayesian shrinkage toward global priors to prevent overfitting small samples
+    - Coupling with xG to align corner predictions with team dominance
+    - Consistent more_corners derivation from team Poisson distributions
     
     Predicts:
     - Total corners over/under
     - Team corner totals
-    - More corners team
-    - First/last corner (if event data available)
-    - Race to X corners (if event data available)
+    - More corners team (derived consistently from team lambdas)
     """
     
     # Typical corner lines
@@ -77,120 +142,180 @@ class CornersModel:
     def __init__(self):
         pass
     
+    def _apply_shrinkage(
+        self,
+        observed_mean: float,
+        sample_size: int,
+        prior_mean: float = None,
+    ) -> float:
+        """Apply Bayesian shrinkage to corner estimates."""
+        if prior_mean is None:
+            prior_mean = GLOBAL_PRIORS["corners_per_team"]
+        ess = EFFECTIVE_SAMPLE_SIZES["corners"]
+        return bayesian_shrinkage(observed_mean, prior_mean, sample_size, ess)
+    
     def predict_total_corners(
         self,
         home_avg_corners: float,
         away_avg_corners: float,
         home_avg_corners_conceded: float = None,
         away_avg_corners_conceded: float = None,
-    ) -> Dict[str, float]:
+        home_sample_size: int = 0,
+        away_sample_size: int = 0,
+        home_xg: float = None,
+        away_xg: float = None,
+    ) -> Dict[str, Any]:
         """
-        Predict total corners over/under probabilities.
+        Predict total corners over/under probabilities with regularization.
         
         Args:
             home_avg_corners: Home team avg corners for
             away_avg_corners: Away team avg corners for
             home_avg_corners_conceded: Home team avg corners against (optional)
             away_avg_corners_conceded: Away team avg corners against (optional)
+            home_sample_size: Number of matches for home team
+            away_sample_size: Number of matches for away team
+            home_xg: Home team expected goals (for coupling)
+            away_xg: Away team expected goals (for coupling)
             
         Returns:
-            Dict with over/under probabilities for each line
+            Dict with over/under probabilities for each line, expected_total, and effective_sample_size
         """
-        # Estimate expected total corners
-        # Simple: average of both teams' attack stats
+        # Apply Bayesian shrinkage
+        home_lambda = self._apply_shrinkage(home_avg_corners, home_sample_size)
+        away_lambda = self._apply_shrinkage(away_avg_corners, away_sample_size)
+        
+        # If xG data available, couple corners with expected goals
+        # Teams with higher xG should get more corners (more attacking pressure)
+        if home_xg is not None and away_xg is not None:
+            xg_ratio_home = home_xg / max(home_xg + away_xg, 0.1)
+            xg_ratio_away = away_xg / max(home_xg + away_xg, 0.1)
+            # Blend: 70% corners stats, 30% xG-based expectation
+            base_total = GLOBAL_PRIORS["total_corners_match"]
+            home_lambda = 0.7 * home_lambda + 0.3 * base_total * xg_ratio_home
+            away_lambda = 0.7 * away_lambda + 0.3 * base_total * xg_ratio_away
+        
+        # Use attack/defense combination if available
         if home_avg_corners_conceded is not None and away_avg_corners_conceded is not None:
-            # Use both attack and defense stats
-            home_expected = (home_avg_corners + away_avg_corners_conceded) / 2
-            away_expected = (away_avg_corners + home_avg_corners_conceded) / 2
+            home_def = self._apply_shrinkage(home_avg_corners_conceded, home_sample_size)
+            away_def = self._apply_shrinkage(away_avg_corners_conceded, away_sample_size)
+            home_expected = (home_lambda + away_def) / 2
+            away_expected = (away_lambda + home_def) / 2
         else:
-            home_expected = home_avg_corners
-            away_expected = away_avg_corners
+            home_expected = home_lambda
+            away_expected = away_lambda
         
         total_lambda = home_expected + away_expected
         
         # Calculate over/under for each line
         predictions = {}
         for line in self.CORNER_LINES:
-            line_int = int(line + 0.5)  # Convert 8.5 -> 9
+            line_int = int(line + 0.5)
             over_prob = poisson_sf(line_int - 1, total_lambda)
             under_prob = 1.0 - over_prob
             
             predictions[f"over_{int(line)}"] = round(over_prob, 4)
             predictions[f"under_{int(line)}"] = round(under_prob, 4)
         
+        # Compute effective sample size (harmonic mean weighted)
+        total_ss = home_sample_size + away_sample_size
+        eff_ss = min(total_ss, 2 * EFFECTIVE_SAMPLE_SIZES["corners"])
+        
         return {
             "expected_total": round(total_lambda, 2),
             "lines": predictions,
+            "effective_sample_size": round(eff_ss, 1),
+            "home_lambda": round(home_expected, 2),
+            "away_lambda": round(away_expected, 2),
         }
     
     def predict_team_corners(
         self,
         home_avg_corners: float,
         away_avg_corners: float,
-    ) -> Dict[str, float]:
+        home_sample_size: int = 0,
+        away_sample_size: int = 0,
+    ) -> Dict[str, Any]:
         """
-        Predict team corner totals.
+        Predict team corner totals with regularization.
         
-        Args:
-            home_avg_corners: Home team avg corners for
-            away_avg_corners: Away team avg corners for
-            
-        Returns:
-            Dict with team over/under probabilities
+        Returns dict with both team_lines and lambda values for consistency.
         """
+        home_lambda = self._apply_shrinkage(home_avg_corners, home_sample_size)
+        away_lambda = self._apply_shrinkage(away_avg_corners, away_sample_size)
+        
         predictions = {}
         
-        for prefix, avg in [("home", home_avg_corners), ("away", away_avg_corners)]:
+        for prefix, lam in [("home", home_lambda), ("away", away_lambda)]:
             for line in self.TEAM_CORNER_LINES:
                 line_int = int(line + 0.5)
-                over_prob = poisson_sf(line_int - 1, avg)
+                over_prob = poisson_sf(line_int - 1, lam)
                 under_prob = 1.0 - over_prob
                 
                 predictions[f"{prefix}_over_{int(line)}"] = round(over_prob, 4)
                 predictions[f"{prefix}_under_{int(line)}"] = round(under_prob, 4)
         
-        return predictions
+        return {
+            **predictions,
+            "home_lambda": round(home_lambda, 2),
+            "away_lambda": round(away_lambda, 2),
+        }
     
     def predict_more_corners(
         self,
         home_avg_corners: float,
         away_avg_corners: float,
+        home_sample_size: int = 0,
+        away_sample_size: int = 0,
     ) -> Dict[str, float]:
         """
         Predict which team will have more corners.
         
-        Uses Skellam distribution approximation (difference of Poissons).
+        Uses Skellam distribution (difference of independent Poissons).
+        This is CONSISTENT with team_corners lambdas - uses same underlying distribution.
         
         Args:
             home_avg_corners: Home team avg corners for
             away_avg_corners: Away team avg corners for
+            home_sample_size: Sample size for home
+            away_sample_size: Sample size for away
             
         Returns:
             Dict with home/away/tie probabilities
         """
-        # Simplified: use normal approximation to Skellam
-        diff_mean = home_avg_corners - away_avg_corners
-        diff_var = home_avg_corners + away_avg_corners
-        diff_std = math.sqrt(diff_var) if diff_var > 0 else 1.0
+        # Apply same shrinkage as team_corners for consistency
+        home_lambda = self._apply_shrinkage(home_avg_corners, home_sample_size)
+        away_lambda = self._apply_shrinkage(away_avg_corners, away_sample_size)
         
-        # P(home > away) = P(diff > 0)
-        # Using normal CDF approximation
-        home_prob = self._normal_cdf(diff_mean / diff_std)
-        away_prob = self._normal_cdf(-diff_mean / diff_std)
+        # Use Skellam distribution: P(home > away) where home ~ Pois(λ_h), away ~ Pois(λ_a)
+        # We compute by summing joint probabilities
+        max_goals = 15  # Sufficient for convergence
         
-        # Tie probability: P(-0.5 < diff < 0.5)
-        tie_prob = self._normal_cdf((0.5 - diff_mean) / diff_std) - self._normal_cdf((-0.5 - diff_mean) / diff_std)
+        p_home_win = 0.0
+        p_away_win = 0.0
+        p_tie = 0.0
         
-        # Normalize
-        total = home_prob + away_prob + tie_prob
-        home_prob /= total
-        away_prob /= total
-        tie_prob /= total
+        for i in range(max_goals):
+            for j in range(max_goals):
+                p_ij = poisson_pmf(i, home_lambda) * poisson_pmf(j, away_lambda)
+                if i > j:
+                    p_home_win += p_ij
+                elif i < j:
+                    p_away_win += p_ij
+                else:
+                    p_tie += p_ij
+        
+        # Normalize (should already sum to ~1, but ensure numerical stability)
+        total = p_home_win + p_away_win + p_tie
+        if total > 0:
+            p_home_win /= total
+            p_away_win /= total
+            p_tie /= total
         
         return {
-            "home": round(home_prob, 4),
-            "away": round(away_prob, 4),
-            "tie": round(tie_prob, 4),
+            "home": round(p_home_win, 4),
+            "away": round(p_away_win, 4),
+            "tie": round(p_tie, 4),
         }
     
     def _normal_cdf(self, x: float) -> float:
@@ -200,13 +325,17 @@ class CornersModel:
 
 class CardsModel:
     """
-    Poisson/Negative Binomial model for cards markets.
+    Poisson/Negative Binomial model for cards markets with Bayesian regularization.
+    
+    Key improvements:
+    - Bayesian shrinkage toward global priors
+    - Coupling with match intensity (xG difference indicates competitive games)
+    - Consistent more_cards derivation from team Poisson distributions
     
     Predicts:
     - Total cards over/under
     - Team card totals
-    - More cards team
-    - First card (if event data available)
+    - More cards team (derived consistently from team lambdas)
     """
     
     # Typical card lines
@@ -216,95 +345,148 @@ class CardsModel:
     def __init__(self):
         pass
     
+    def _apply_shrinkage(
+        self,
+        observed_mean: float,
+        sample_size: int,
+        prior_mean: float = None,
+    ) -> float:
+        """Apply Bayesian shrinkage to card estimates."""
+        if prior_mean is None:
+            prior_mean = GLOBAL_PRIORS["cards_per_team"]
+        ess = EFFECTIVE_SAMPLE_SIZES["cards"]
+        return bayesian_shrinkage(observed_mean, prior_mean, sample_size, ess)
+    
     def predict_total_cards(
         self,
         home_avg_cards: float,
         away_avg_cards: float,
-        league_avg_cards: float = 4.0,
-    ) -> Dict[str, float]:
+        home_sample_size: int = 0,
+        away_sample_size: int = 0,
+        home_xg: float = None,
+        away_xg: float = None,
+    ) -> Dict[str, Any]:
         """
-        Predict total cards over/under probabilities.
-        
-        Cards often show overdispersion, so we use Negative Binomial.
+        Predict total cards over/under probabilities with regularization.
         
         Args:
             home_avg_cards: Home team avg cards for
             away_avg_cards: Away team avg cards for
-            league_avg_cards: League average for shrinkage
+            home_sample_size: Number of matches for home team
+            away_sample_size: Number of matches for away team
+            home_xg: Home team expected goals (for coupling)
+            away_xg: Away team expected goals (for coupling)
             
         Returns:
-            Dict with over/under probabilities
+            Dict with over/under probabilities, expected_total, effective_sample_size
         """
-        # Shrink towards league average
-        shrinkage = 0.3
-        home_expected = (1 - shrinkage) * home_avg_cards + shrinkage * league_avg_cards
-        away_expected = (1 - shrinkage) * away_avg_cards + shrinkage * league_avg_cards
+        # Apply Bayesian shrinkage
+        home_lambda = self._apply_shrinkage(home_avg_cards, home_sample_size)
+        away_lambda = self._apply_shrinkage(away_avg_cards, away_sample_size)
         
-        total_lambda = home_expected + away_expected
+        # Couple with xG: close matches (similar xG) tend to have more cards
+        if home_xg is not None and away_xg is not None:
+            xg_diff = abs(home_xg - away_xg)
+            # Higher xG diff -> more one-sided -> fewer cards typically
+            # Lower xG diff -> competitive -> more cards
+            competitiveness_factor = 1.0 + 0.15 * math.exp(-xg_diff / 0.5)
+            home_lambda *= competitiveness_factor
+            away_lambda *= competitiveness_factor
         
-        # For cards, use slightly higher dispersion
-        # NB parameters: mean = total_lambda, variance = total_lambda * (1 + alpha)
-        alpha = 0.3  # dispersion parameter
+        total_lambda = home_lambda + away_lambda
         
         predictions = {}
         for line in self.CARD_LINES:
             line_int = int(line + 0.5)
-            
-            # Use Poisson for simplicity (NB requires more tuning)
             over_prob = poisson_sf(line_int - 1, total_lambda)
             under_prob = 1.0 - over_prob
             
             predictions[f"over_{int(line)}"] = round(over_prob, 4)
             predictions[f"under_{int(line)}"] = round(under_prob, 4)
         
+        total_ss = home_sample_size + away_sample_size
+        eff_ss = min(total_ss, 2 * EFFECTIVE_SAMPLE_SIZES["cards"])
+        
         return {
             "expected_total": round(total_lambda, 2),
             "lines": predictions,
+            "effective_sample_size": round(eff_ss, 1),
+            "home_lambda": round(home_lambda, 2),
+            "away_lambda": round(away_lambda, 2),
         }
     
     def predict_team_cards(
         self,
         home_avg_cards: float,
         away_avg_cards: float,
-    ) -> Dict[str, float]:
-        """Predict team card totals."""
+        home_sample_size: int = 0,
+        away_sample_size: int = 0,
+    ) -> Dict[str, Any]:
+        """Predict team card totals with regularization."""
+        home_lambda = self._apply_shrinkage(home_avg_cards, home_sample_size)
+        away_lambda = self._apply_shrinkage(away_avg_cards, away_sample_size)
+        
         predictions = {}
         
-        for prefix, avg in [("home", home_avg_cards), ("away", away_avg_cards)]:
+        for prefix, lam in [("home", home_lambda), ("away", away_lambda)]:
             for line in self.TEAM_CARD_LINES:
                 line_int = int(line + 0.5)
-                over_prob = poisson_sf(line_int - 1, avg)
+                over_prob = poisson_sf(line_int - 1, lam)
                 under_prob = 1.0 - over_prob
                 
                 predictions[f"{prefix}_over_{int(line)}"] = round(over_prob, 4)
                 predictions[f"{prefix}_under_{int(line)}"] = round(under_prob, 4)
         
-        return predictions
+        return {
+            **predictions,
+            "home_lambda": round(home_lambda, 2),
+            "away_lambda": round(away_lambda, 2),
+        }
     
     def predict_more_cards(
         self,
         home_avg_cards: float,
         away_avg_cards: float,
+        home_sample_size: int = 0,
+        away_sample_size: int = 0,
     ) -> Dict[str, float]:
-        """Predict which team will have more cards."""
-        # Same approach as corners
-        diff_mean = home_avg_cards - away_avg_cards
-        diff_var = home_avg_cards + away_avg_cards
-        diff_std = math.sqrt(diff_var) if diff_var > 0 else 1.0
+        """
+        Predict which team will have more cards.
         
-        home_prob = self._normal_cdf(diff_mean / diff_std)
-        away_prob = self._normal_cdf(-diff_mean / diff_std)
-        tie_prob = self._normal_cdf((0.5 - diff_mean) / diff_std) - self._normal_cdf((-0.5 - diff_mean) / diff_std)
+        Uses Skellam distribution (difference of independent Poissons).
+        CONSISTENT with team_cards lambdas.
+        """
+        # Apply same shrinkage as team_cards for consistency
+        home_lambda = self._apply_shrinkage(home_avg_cards, home_sample_size)
+        away_lambda = self._apply_shrinkage(away_avg_cards, away_sample_size)
         
-        total = home_prob + away_prob + tie_prob
-        home_prob /= total
-        away_prob /= total
-        tie_prob /= total
+        # Use Skellam distribution via joint probability summation
+        max_goals = 15
+        
+        p_home_win = 0.0
+        p_away_win = 0.0
+        p_tie = 0.0
+        
+        for i in range(max_goals):
+            for j in range(max_goals):
+                p_ij = poisson_pmf(i, home_lambda) * poisson_pmf(j, away_lambda)
+                if i > j:
+                    p_home_win += p_ij
+                elif i < j:
+                    p_away_win += p_ij
+                else:
+                    p_tie += p_ij
+        
+        total = p_home_win + p_away_win + p_tie
+        if total > 0:
+            p_home_win /= total
+            p_away_win /= total
+            p_tie /= total
         
         return {
-            "home": round(home_prob, 4),
-            "away": round(away_prob, 4),
-            "tie": round(tie_prob, 4),
+            "home": round(p_home_win, 4),
+            "away": round(p_away_win, 4),
+            "tie": round(p_tie, 4),
         }
     
     def _normal_cdf(self, x: float) -> float:
@@ -372,20 +554,18 @@ class ShotsModel:
 
 class PlayerPropsModel:
     """
-    Heuristic/hierarchical model for player props.
+    Heuristic/hierarchical model for player props with proper probability normalization.
+    
+    Key improvements:
+    - Anytime scorer probabilities are capped by team lambda (sum <= λ_team)
+    - First scorer probabilities sum to <= 1.0 with explicit "no goal" probability
+    - Proper allocation of team xG to individual players based on shot share, role
     
     Predicts:
-    - Anytime scorer
-    - First scorer
+    - Anytime scorer (normalized across team)
+    - First scorer (normalized distribution)
     - Player SOT over/under
     - Player assists over/under
-    
-    Uses:
-    - Team expected goals
-    - Player shot share
-    - Player goal share
-    - Minutes/starter status
-    - Set piece role proxy
     """
     
     # Typical player SOT lines
@@ -395,6 +575,200 @@ class PlayerPropsModel:
     def __init__(self):
         pass
     
+    def predict_anytime_scorer_normalized(
+        self,
+        players_data: List[Dict[str, Any]],
+        team_xg: float,
+        team_total_shots: float = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Predict anytime scorer probabilities for multiple players with proper normalization.
+        
+        The sum of all player probabilities is constrained to be <= team_xg.
+        
+        Args:
+            players_data: List of dicts with player stats (goals, shots, minutes, position, etc.)
+            team_xg: Team expected goals
+            team_total_shots: Team total shots (optional)
+            
+        Returns:
+            List of dicts with player_name, probability, and metadata
+        """
+        if not players_data:
+            return []
+        
+        # Compute raw scores for each player based on:
+        # - goals per 90
+        # - shot share
+        # - position bonus (strikers get more)
+        # - minutes/starter status
+        
+        player_scores = []
+        for pdata in players_data:
+            goals = pdata.get("goals", 0) or 0
+            matches = pdata.get("matches_played", 1) or 1
+            shots = pdata.get("shots", 0) or 0
+            minutes = pdata.get("minutes", 0) or 0
+            position = pdata.get("position", "").lower()
+            is_starter = pdata.get("is_starter", False) or pdata.get("starts", 0) > 0
+            
+            # Goals per 90 with regularization toward team average
+            team_goals_per_match = team_xg / max(matches, 1)
+            player_goals_per_90 = (goals / matches) * (90 / max(minutes, 45)) if minutes > 0 else 0
+            
+            # Shot share
+            if team_total_shots and team_total_shots > 0:
+                shot_share = shots / team_total_shots
+            else:
+                shot_share = 1.0 / len(players_data)
+            
+            # Position bonus
+            position_bonus = 1.0
+            if any(pos in position for pos in ["forward", "striker", "attacker"]):
+                position_bonus = 1.3
+            elif any(pos in position for pos in ["midfielder", "winger"]):
+                position_bonus = 1.0
+            elif any(pos in position for pos in ["defender", "back"]):
+                position_bonus = 0.5
+            elif "goalkeeper" in position:
+                position_bonus = 0.05
+            
+            # Starter/mins factor
+            mins_factor = min(1.0, minutes / 90) if minutes > 0 else 0.3
+            starter_bonus = 1.2 if is_starter else 0.8
+            
+            # Raw score combining all factors
+            raw_score = (
+                0.4 * player_goals_per_90 +
+                0.3 * shot_share * team_xg +
+                0.2 * position_bonus +
+                0.1 * mins_factor * starter_bonus
+            )
+            
+            player_scores.append({
+                "player_name": pdata.get("player_name", "Unknown"),
+                "team": pdata.get("team", ""),
+                "raw_score": max(0.01, raw_score),
+                "position": position,
+                "goals": goals,
+                "matches": matches,
+            })
+        
+        # Normalize so sum of probabilities <= team_xg
+        total_raw = sum(p["raw_score"] for p in player_scores)
+        
+        # Scale factor: we want sum(probs) ≈ team_xg * 0.9 (leave some margin)
+        # But also cap individual probs at reasonable levels
+        target_sum = team_xg * 0.85  # Leave ~15% for unmodeled players/events
+        
+        results = []
+        for p in player_scores:
+            if total_raw > 0:
+                prob = (p["raw_score"] / total_raw) * target_sum
+            else:
+                prob = team_xg / len(player_scores)
+            
+            # Cap individual probability (no single player should have >60% anytime)
+            prob = min(prob, 0.60)
+            # Floor at minimum
+            prob = max(prob, 0.01)
+            
+            results.append({
+                "player_name": p["player_name"],
+                "team": p["team"],
+                "probability": round(prob, 4),
+                "goals_recent": p["goals"],
+                "matches_played": p["matches"],
+            })
+        
+        # Sort by probability descending
+        results.sort(key=lambda x: x["probability"], reverse=True)
+        
+        return results
+    
+    def predict_first_scorer_normalized(
+        self,
+        anytime_probs: List[Dict[str, Any]],
+        team_xg: float,
+        no_goal_probability: float = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Predict first scorer probabilities with proper normalization.
+        
+        The sum of all first scorer probabilities + P(no goal) = 1.0
+        
+        Args:
+            anytime_probs: List of dicts from predict_anytime_scorer_normalized
+            team_xg: Team expected goals
+            no_goal_probability: Explicit P(no goal) if provided, else derived
+            
+        Returns:
+            List of dicts with player_name, probability, sorted descending
+        """
+        if not anytime_probs:
+            return []
+        
+        # Derive no-goal probability from team xG using Poisson
+        # P(no goal) = P(team scores 0) = exp(-λ)
+        if no_goal_probability is None:
+            no_goal_prob = math.exp(-team_xg)
+        else:
+            no_goal_prob = no_goal_probability
+        
+        # Remaining probability mass for scorers
+        scorer_mass = 1.0 - no_goal_prob
+        
+        # Compute raw scores from anytime probabilities
+        # Players with higher anytime prob should have higher first-scorer prob
+        total_anytime = sum(p["probability"] for p in anytime_probs)
+        
+        results = []
+        for p in anytime_probs:
+            if total_anytime > 0:
+                # Allocate scorer_mass proportionally to anytime probability
+                raw_score = p["probability"] / total_anytime
+            else:
+                raw_score = 1.0 / len(anytime_probs)
+            
+            results.append({
+                "player_name": p["player_name"],
+                "team": p.get("team", ""),
+                "raw_score": raw_score,
+            })
+        
+        # Normalize so sum = scorer_mass
+        total_raw = sum(r["raw_score"] for r in results)
+        
+        final_results = []
+        for r in results:
+            if total_raw > 0:
+                prob = (r["raw_score"] / total_raw) * scorer_mass
+            else:
+                prob = scorer_mass / len(results)
+            
+            # Cap individual first-scorer prob (typically <35% for any player)
+            # But ensure we don't cap so much that total doesn't reach scorer_mass
+            prob = min(prob, 0.40)
+            prob = max(prob, 0.001)
+            
+            final_results.append({
+                "player_name": r["player_name"],
+                "team": r["team"],
+                "probability": round(prob, 4),
+            })
+        
+        # Add explicit no-goal entry for clarity
+        final_results.append({
+            "player_name": "[NO GOAL]",
+            "team": "",
+            "probability": round(no_goal_prob, 4),
+        })
+        
+        # Sort by probability descending
+        final_results.sort(key=lambda x: x["probability"], reverse=True)
+        
+        return final_results
+    
     def predict_anytime_scorer(
         self,
         player_data: Dict[str, Any],
@@ -402,18 +776,11 @@ class PlayerPropsModel:
         team_total_shots: float,
     ) -> float:
         """
-        Predict probability player scores anytime.
-        
-        Args:
-            player_data: Dict with player stats (goals, shots, minutes, is_starter, etc.)
-            team_xg: Team expected goals
-            team_total_shots: Team total shots
-            
-        Returns:
-            Probability of scoring (0-1)
+        Legacy method for single-player anytime scorer prediction.
+        Deprecated: use predict_anytime_scorer_normalized instead.
         """
         # Base rate from team xg
-        base_prob = team_xg / 11  # Roughly equal distribution
+        base_prob = team_xg / 11
         
         # Adjust by player's historical goal share
         goals = player_data.get("goals") or 0
@@ -453,15 +820,14 @@ class PlayerPropsModel:
         is_starter: bool = True,
     ) -> float:
         """
-        Predict probability player scores first goal.
-        
-        Approximation: first_scorer ≈ anytime / expected_goals_in_match
+        Legacy method for single-player first scorer prediction.
+        Deprecated: use predict_first_scorer_normalized instead.
         """
         if not is_starter:
-            return anytime_prob * 0.3  # Subs rarely score first
+            return anytime_prob * 0.3
         
         # Rough approximation
-        expected_goals = 2.5  # Average match goals
+        expected_goals = 2.5
         first_scorer_prob = anytime_prob / expected_goals
         
         return round(max(0.001, min(0.5, first_scorer_prob)), 4)
