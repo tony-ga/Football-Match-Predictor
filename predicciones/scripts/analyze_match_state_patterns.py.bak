@@ -292,22 +292,16 @@ def load_match_summary(event_id: str, league: str = "fifa.world",
 
 
 def load_all_summaries_from_cache(cache_dir: str = "data/cache/espn",
-                                   league_filter: Optional[str] = None,
-                                   from_date: Optional[datetime] = None,
-                                   to_date: Optional[datetime] = None,
-                                   max_matches: Optional[int] = None) -> List[Tuple[str, str, Dict[str, Any]]]:
+                                   league_filter: Optional[str] = None) -> List[Tuple[str, str, Dict[str, Any]]]:
     """
-    Load all match summaries from cache directory with optional filters.
+    Load all match summaries from cache directory.
     
     Args:
         cache_dir: Directory for cached summaries
         league_filter: Optional league to filter by
-        from_date: Optional start date filter
-        to_date: Optional end date filter
-        max_matches: Optional maximum number of matches to return
     
     Returns:
-        List of (event_id, league, summary) tuples sorted by date
+        List of (event_id, league, summary) tuples
     """
     import os
     import re
@@ -340,40 +334,11 @@ def load_all_summaries_from_cache(cache_dir: str = "data/cache/espn",
                     with open(filepath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         summary = data.get('response', data)
-                        
-                        # Extract date for filtering
-                        match_date = None
-                        header = summary.get('header', {})
-                        date_str = header.get('date') or header.get('startDate')
-                        if date_str:
-                            try:
-                                # Handle various date formats
-                                if 'T' in date_str:
-                                    match_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).replace(tzinfo=None)
-                                else:
-                                    match_date = datetime.strptime(date_str[:10], '%Y-%m-%d')
-                            except:
-                                pass
-                        
-                        # Apply date filters
-                        if from_date and match_date and match_date < from_date:
-                            continue
-                        if to_date and match_date and match_date > to_date:
-                            continue
-                        
-                        results.append((event_id, league, summary, match_date))
+                        results.append((event_id, league, summary))
                 except Exception as e:
                     logger.debug(f"Error loading {filename}: {e}")
     
-    # Sort by date (most recent first, or unknown dates last)
-    results.sort(key=lambda x: x[3] if x[3] else datetime.max, reverse=True)
-    
-    # Apply max_matches limit
-    if max_matches and len(results) > max_matches:
-        results = results[:max_matches]
-    
-    # Return without the date field (maintain backward compatibility)
-    return [(r[0], r[1], r[2]) for r in results]
+    return results
 
 
 # =============================================================================
@@ -1736,9 +1701,6 @@ def export_patterns_report(
 def run_match_state_analysis(
     league_filter: Optional[str] = None,
     days_back: int = 365,
-    from_date: Optional[datetime] = None,
-    to_date: Optional[datetime] = None,
-    max_matches: Optional[int] = None,
     output_dir: str = "data/derived",
     verbose: bool = True
 ) -> Dict[str, Any]:
@@ -1747,10 +1709,7 @@ def run_match_state_analysis(
     
     Args:
         league_filter: Optional league to filter by
-        days_back: Days back to consider (used if from_date not provided)
-        from_date: Optional start date filter
-        to_date: Optional end date filter
-        max_matches: Optional maximum number of matches to process
+        days_back: Days back to consider (not enforced without dates)
         output_dir: Output directory for derived datasets
         verbose: Print progress
     
@@ -1762,20 +1721,11 @@ def run_match_state_analysis(
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
-    # Calculate from_date if not provided but days_back is
-    if from_date is None and days_back:
-        from_date = datetime.now() - timedelta(days=days_back)
-    
     # Load all summaries
     if verbose:
         print("Loading match summaries from cache...")
     
-    summaries = load_all_summaries_from_cache(
-        league_filter=league_filter,
-        from_date=from_date,
-        to_date=to_date,
-        max_matches=max_matches
-    )
+    summaries = load_all_summaries_from_cache(league_filter=league_filter)
     
     if not summaries:
         print("No summaries found in cache.")
@@ -1787,7 +1737,6 @@ def run_match_state_analysis(
     # Process each match
     all_windows = []
     all_transitions = []
-    coverage_data = []  # For data coverage report
     
     for event_id, league, summary in summaries:
         if verbose:
@@ -1796,43 +1745,14 @@ def run_match_state_analysis(
         # Get match context
         context = get_match_context(summary)
         if not context:
-            coverage_data.append({
-                'match_id': event_id,
-                'league': league,
-                'date': '',
-                'home_team': '',
-                'away_team': '',
-                'cached_summary': True,
-                'summary_valid': False,
-                'commentary_count': 0,
-                'key_events_count': 0,
-                'windows_generated': 0,
-                'transitions_generated': 0,
-                'excluded_reason': 'Invalid context'
-            })
             continue
         
         # Extract events
         events = extract_commentary_events(summary, event_id)
-        key_events = extract_key_events(summary, event_id)
         
         if len(events) < 5:
             if verbose:
                 print(f"  Skipping - too few events ({len(events)})")
-            coverage_data.append({
-                'match_id': event_id,
-                'league': league,
-                'date': context.get('date', ''),
-                'home_team': context.get('home_team', ''),
-                'away_team': context.get('away_team', ''),
-                'cached_summary': True,
-                'summary_valid': False,
-                'commentary_count': len(events),
-                'key_events_count': len(key_events),
-                'windows_generated': 0,
-                'transitions_generated': 0,
-                'excluded_reason': f'Too few events ({len(events)})'
-            })
             continue
         
         # Generate fixed windows
@@ -1842,22 +1762,6 @@ def run_match_state_analysis(
         # Generate event-anchored windows
         anchored_windows = generate_event_anchored_windows(events, context, lookforward_minutes=15)
         all_windows.extend(anchored_windows)
-        
-        # Record coverage data
-        coverage_data.append({
-            'match_id': event_id,
-            'league': league,
-            'date': context.get('date', ''),
-            'home_team': context.get('home_team', ''),
-            'away_team': context.get('away_team', ''),
-            'cached_summary': True,
-            'summary_valid': True,
-            'commentary_count': len(events),
-            'key_events_count': len(key_events),
-            'windows_generated': len(fixed_windows) + len(anchored_windows),
-            'transitions_generated': len(fixed_windows) + len(anchored_windows),  # Approximate
-            'excluded_reason': ''
-        })
     
     if verbose:
         print(f"\nGenerated {len(all_windows)} total windows")
@@ -1879,26 +1783,11 @@ def run_match_state_analysis(
     patterns_path = os.path.join(output_dir, 'state_pattern_summary.csv')
     transitions_path = os.path.join(output_dir, 'markov_ready_transitions.csv')
     report_path = os.path.join(output_dir, 'pattern_analysis_report.md')
-    coverage_path = os.path.join(output_dir, 'data_coverage_report.csv')
     
     export_windows_to_csv(all_windows, windows_path)
     export_patterns_to_csv(patterns, patterns_path)
     export_markov_transitions_to_csv(transitions, transitions_path)
     export_patterns_report(patterns, report_path)
-    
-    # Export coverage report
-    if coverage_data:
-        with open(coverage_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=[
-                'match_id', 'league', 'date', 'home_team', 'away_team',
-                'cached_summary', 'summary_valid', 'commentary_count',
-                'key_events_count', 'windows_generated', 'transitions_generated',
-                'excluded_reason'
-            ])
-            writer.writeheader()
-            writer.writerows(coverage_data)
-        if verbose:
-            print(f"  - Coverage: {coverage_path}")
     
     if verbose:
         print(f"\nExported:")
@@ -1909,7 +1798,6 @@ def run_match_state_analysis(
     
     return {
         'matches_processed': len(summaries),
-        'matches_valid': len([d for d in coverage_data if d['summary_valid']]),
         'windows_generated': len(all_windows),
         'patterns_detected': len(patterns),
         'transitions_count': len(transitions),
@@ -1917,8 +1805,7 @@ def run_match_state_analysis(
             'windows': windows_path,
             'patterns': patterns_path,
             'transitions': transitions_path,
-            'report': report_path,
-            'coverage': coverage_path
+            'report': report_path
         }
     }
 
@@ -1932,8 +1819,6 @@ if __name__ == '__main__':
         epilog="""
 Examples:
   python scripts/analyze_match_state_patterns.py --league fifa.world --days-back 365
-  python scripts/analyze_match_state_patterns.py --league fifa.world --use-all-cache --output-dir output/analysis_full
-  python scripts/analyze_match_state_patterns.py --league fifa.world --from-date 2025-01-01 --to-date 2026-07-07 --use-all-cache
   python scripts/analyze_match_state_patterns.py --verbose
   python scripts/analyze_match_state_patterns.py --output-dir output/analysis
         """
@@ -1943,18 +1828,6 @@ Examples:
                         help='Filter by league (e.g., fifa.world, eng.1)')
     parser.add_argument('--days-back', type=int, default=365,
                         help='Days back to consider (default: 365)')
-    parser.add_argument('--from-date', type=str, default=None,
-                        help='Start date filter (YYYY-MM-DD)')
-    parser.add_argument('--to-date', type=str, default=None,
-                        help='End date filter (YYYY-MM-DD)')
-    parser.add_argument('--max-matches', type=int, default=None,
-                        help='Maximum number of matches to process')
-    parser.add_argument('--use-all-cache', action='store_true',
-                        help='Use all cached summaries without date filtering')
-    parser.add_argument('--fetch-missing', action='store_true',
-                        help='Fetch missing matches from ESPN API (not yet implemented)')
-    parser.add_argument('--min-pattern-sample', type=int, default=20,
-                        help='Minimum sample size for robust pattern detection (default: 20)')
     parser.add_argument('--output-dir', type=str, default='data/derived',
                         help='Output directory for derived datasets')
     parser.add_argument('--verbose', action='store_true',
@@ -1964,37 +1837,9 @@ Examples:
     
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
     
-    # Parse dates if provided
-    from_date = None
-    to_date = None
-    
-    if args.from_date:
-        try:
-            from_date = datetime.strptime(args.from_date, '%Y-%m-%d')
-        except ValueError:
-            print(f"Error: Invalid from-date format '{args.from_date}'. Use YYYY-MM-DD.")
-            exit(1)
-    
-    if args.to_date:
-        try:
-            to_date = datetime.strptime(args.to_date, '%Y-%m-%d')
-        except ValueError:
-            print(f"Error: Invalid to-date format '{args.to_date}'. Use YYYY-MM-DD.")
-            exit(1)
-    
-    # If --use-all-cache is set, disable date filtering
-    days_back = args.days_back
-    if args.use_all_cache:
-        days_back = None  # Disable date filtering
-        from_date = None
-        to_date = None
-    
     result = run_match_state_analysis(
         league_filter=args.league,
-        days_back=days_back,
-        from_date=from_date,
-        to_date=to_date,
-        max_matches=args.max_matches,
+        days_back=args.days_back,
         output_dir=args.output_dir,
         verbose=args.verbose
     )
@@ -2004,7 +1849,6 @@ Examples:
         print(f"Error: {result['error']}")
     else:
         print(f"Matches processed: {result['matches_processed']}")
-        print(f"Matches valid: {result.get('matches_valid', 'N/A')}")
         print(f"Windows generated: {result['windows_generated']}")
         print(f"Patterns detected: {result['patterns_detected']}")
         print(f"Transitions: {result['transitions_count']}")

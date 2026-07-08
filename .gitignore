@@ -1,4 +1,4 @@
 ```
-# Backup files
-*.bak
+# Analysis output files
+predicciones/output/analysis/
 ```
