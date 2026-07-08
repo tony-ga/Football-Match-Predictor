@@ -208,6 +208,7 @@ def _parse_clock_display(clock_str: Optional[str]) -> int:
         "90+4'" -> 94
         "HT" -> 45
         "FT" -> 90
+        "90'+2'" -> 92
     
     Args:
         clock_str: Clock display string from ESPN
@@ -218,7 +219,8 @@ def _parse_clock_display(clock_str: Optional[str]) -> int:
     if not clock_str:
         return 0
     
-    clock_str = clock_str.strip().rstrip("'")
+    # Remove trailing apostrophe and strip
+    clock_str = str(clock_str).strip().rstrip("'")
     
     # Handle halftime/fulltime
     if clock_str.upper() == "HT":
@@ -226,7 +228,20 @@ def _parse_clock_display(clock_str: Optional[str]) -> int:
     if clock_str.upper() == "FT":
         return 90
     
-    # Handle added time (e.g., "45+2")
+    # Handle added time with apostrophe inside (e.g., "90'+2" or "45'+1")
+    # First try pattern like "90'+2" 
+    if "'" in clock_str and "+" in clock_str:
+        parts = clock_str.split("+")
+        try:
+            base_part = parts[0].rstrip("'")
+            added_part = parts[1].rstrip("'")
+            base = int(base_part)
+            added = int(added_part) if added_part else 0
+            return base + added
+        except (ValueError, IndexError):
+            pass
+    
+    # Handle standard added time (e.g., "45+2")
     if "+" in clock_str:
         parts = clock_str.split("+")
         try:
@@ -236,9 +251,11 @@ def _parse_clock_display(clock_str: Optional[str]) -> int:
         except (ValueError, IndexError):
             pass
     
-    # Regular minutes
+    # Regular minutes - try to extract just the number
     try:
-        return int(clock_str)
+        # Remove any non-numeric characters except + which we already handled
+        cleaned = ''.join(c for c in clock_str if c.isdigit())
+        return int(cleaned) if cleaned else 0
     except ValueError:
         return 0
 
@@ -259,43 +276,123 @@ def _normalize_commentary_event(
     Returns:
         Normalized event dict
     """
-    # Extract basic info
-    event_type_raw = raw_event.get("type", {}).get("name", "").lower().replace(" ", "_").replace("-", "_")
-    description = raw_event.get("text") or raw_event.get("description", "")
+    # Extract basic info - check both top-level and nested 'play' object
+    play_data = raw_event.get("play", {}) or {}
     
-    # Get timing info
-    clock_display = raw_event.get("clock", {}).get("displayTime", "") or raw_event.get("minute", "")
-    period = raw_event.get("period", {}).get("number", 1)
+    # Get type from play object first, then fall back to top-level
+    type_info = play_data.get("type", {}) or raw_event.get("type", {})
+    event_type_raw = type_info.get("text", "").lower().replace(" ", "_").replace("-", "_")
+    if not event_type_raw:
+        event_type_raw = type_info.get("type", "").lower().replace(" ", "_").replace("-", "_")
+    if not event_type_raw:
+        event_type_raw = type_info.get("name", "").lower().replace(" ", "_").replace("-", "_")
     
-    # Parse minute from clock
-    minute = _parse_clock_display(str(clock_display)) if clock_display else 0
+    description = raw_event.get("text") or raw_event.get("description", "") or play_data.get("text", "")
     
-    # Get team info
-    team_data = raw_event.get("team", {}) or {}
+    # Get timing info - try time.displayValue/time.value first (commentary format), then clock
+    time_data = raw_event.get("time", {}) or {}
+    clock_data = raw_event.get("clock", {}) or play_data.get("clock", {})
+    
+    # Prefer displayValue for display, value for calculation
+    display_value = time_data.get("displayValue") or clock_data.get("displayValue") or clock_data.get("displayTime", "")
+    time_value_seconds = time_data.get("value") or clock_data.get("value")
+    
+    # Get period
+    period_data = raw_event.get("period", {}) or play_data.get("period", {})
+    period = period_data.get("number", 1)
+    
+    # Parse minute from display value or calculate from seconds
+    if display_value:
+        minute = _parse_clock_display(str(display_value))
+        clock_display = str(display_value)
+    elif time_value_seconds is not None:
+        # Convert seconds to minutes
+        minute = int(time_value_seconds // 60)
+        clock_display = f"{minute}'"
+    else:
+        minute = 0
+        clock_display = None
+    
+    # Get team info - check play data first
+    team_data = play_data.get("team", {}) or raw_event.get("team", {}) or {}
     team_name = team_data.get("displayName") or team_data.get("name", "")
     team_abbr = team_data.get("abbreviation") or team_data.get("shortName", "")
     
-    # Get player info
-    player_data = raw_event.get("player", {}) or {}
-    player_name = player_data.get("fullName") or player_data.get("displayName", "")
+    # Get player info - check participants array first (most common in commentary)
+    player_name = ""
+    participants = play_data.get("participants", [])
+    if participants:
+        for p in participants:
+            athlete = p.get("athlete", p)
+            player_name = athlete.get("fullName") or athlete.get("displayName", "")
+            if player_name:
+                break
+    
+    # Also check direct player field
+    if not player_name:
+        player_data = play_data.get("player", {}) or raw_event.get("player", {}) or {}
+        player_name = player_data.get("fullName") or player_data.get("displayName", "")
     
     # Map event type
     event_type = COMMENTARY_TYPE_MAPPING.get(event_type_raw, "unknown")
     
-    # Special handling for certain event types based on description
+    # Special handling for certain event types based on description - priority over mapping
     desc_lower = description.lower()
-    if "own goal" in desc_lower or "autogol" in desc_lower:
-        event_type = "own_goal"
+    
+    # Check for goals first (highest priority) - must have "Goal!" pattern
+    if "goal!" in desc_lower:
+        if "own goal" in desc_lower or "autogol" in desc_lower:
+            event_type = "own_goal"
+        else:
+            event_type = "goal"
     elif "penalty" in desc_lower and "goal" in desc_lower:
         event_type = "goal"
     elif "var" in desc_lower and ("decision" in desc_lower or "check" in desc_lower):
         event_type = "var_decision"
+    elif "yellow card" in desc_lower or "tarjeta amarilla" in desc_lower or "shown the yellow card" in desc_lower:
+        event_type = "yellow_card"
+    elif "red card" in desc_lower or "tarjeta roja" in desc_lower or "shown the red card" in desc_lower:
+        event_type = "red_card"
+    elif "substitution" in desc_lower or ("cambio" in desc_lower and "entra" in desc_lower) or "comes on" in desc_lower or "replaces" in desc_lower:
+        event_type = "substitution"
+    elif "corner" in desc_lower and "wins" not in desc_lower:
+        event_type = "corner"
+    elif "offside" in desc_lower:
+        event_type = "offside"
+    elif "foul" in desc_lower and "wins a free kick" in desc_lower:
+        event_type = "foul"
+    elif "attempt saved" in desc_lower or "shot saved" in desc_lower:
+        event_type = "shot_on_target"
+    elif "attempt missed" in desc_lower or "shot missed" in desc_lower:
+        event_type = "shot_off_target"
+    elif "attempt blocked" in desc_lower or "shot blocked" in desc_lower:
+        event_type = "shot_blocked"
+    elif "hit the bar" in desc_lower or "hit the post" in desc_lower or "woodwork" in desc_lower:
+        event_type = "hit_woodwork"
+    elif "free kick" in desc_lower and "wins" not in desc_lower:
+        event_type = "free_kick"
+    elif "injury" in desc_lower or "delay in match" in desc_lower:
+        event_type = "injury_delay"
+    elif "lineups" in desc_lower:
+        event_type = "lineups_announced"
+    elif "first half begins" in desc_lower or "kick-off" in desc_lower or "kickoff" in desc_lower:
+        event_type = "kickoff"
+    elif "first half ends" in desc_lower:
+        event_type = "halftime"
+    elif "second half begins" in desc_lower:
+        event_type = "second_half_start"
+    elif "match ends" in desc_lower or "full-time" in desc_lower or "fulltime" in desc_lower:
+        event_type = "fulltime"
+    elif "second half ends" in desc_lower:
+        event_type = "fulltime"
+    elif "added time" in desc_lower or "minutes of added time" in desc_lower:
+        event_type = "added_time_announced"
     
     return {
         "event_id": event_id,
         "sequence_index": sequence_index,
         "minute": minute,
-        "clock_display": str(clock_display) if clock_display else None,
+        "clock_display": clock_display if clock_display else None,
         "period": period,
         "event_type": event_type,
         "team_name": team_name or None,
@@ -323,23 +420,43 @@ def _normalize_key_event(
     Returns:
         Normalized event dict
     """
-    # Extract basic info
-    event_type_raw = raw_event.get("typeId", "")
-    if isinstance(event_type_raw, int):
-        # If it's a numeric ID, we need to map it differently
-        # For now, use a generic mapping
-        event_type_raw = str(event_type_raw)
-    else:
-        event_type_raw = event_type_raw.lower().replace(" ", "-").replace("_", "-")
+    # Extract basic info - get type from nested type object
+    type_info = raw_event.get("type", {}) or {}
+    event_type_raw = type_info.get("text", "").lower().replace(" ", "-").replace("_", "-")
+    if not event_type_raw:
+        event_type_raw = type_info.get("type", "").lower().replace(" ", "-").replace("_", "-")
+    if not event_type_raw:
+        # Fallback to typeId if present
+        event_type_raw = raw_event.get("typeId", "")
+        if isinstance(event_type_raw, int):
+            event_type_raw = str(event_type_raw)
+        else:
+            event_type_raw = str(event_type_raw).lower().replace(" ", "-").replace("_", "-")
     
     description = raw_event.get("text") or raw_event.get("description", "")
     
-    # Get timing info
-    minute = raw_event.get("minute", 0)
-    if isinstance(minute, dict):
-        minute = minute.get("displayValue", 0) or 0
+    # Get timing info - use clock.displayValue and clock.value
+    clock_data = raw_event.get("clock", {})
+    display_value = clock_data.get("displayValue", "")
+    time_value_seconds = clock_data.get("value")
     
-    period = raw_event.get("period", {}).get("number", 1) if isinstance(raw_event.get("period"), dict) else 1
+    period_data = raw_event.get("period", {})
+    period = period_data.get("number", 1) if isinstance(period_data, dict) else 1
+    
+    # Parse minute from display value or calculate from seconds
+    if display_value:
+        minute = _parse_clock_display(str(display_value))
+        clock_display = str(display_value)
+    elif time_value_seconds is not None:
+        minute = int(time_value_seconds // 60)
+        clock_display = f"{minute}'"
+    else:
+        # Fallback to minute field
+        minute_val = raw_event.get("minute", 0)
+        if isinstance(minute_val, dict):
+            minute_val = minute_val.get("displayValue", 0) or 0
+        minute = int(minute_val) if isinstance(minute_val, (int, float)) else 0
+        clock_display = f"{minute}'" if minute else None
     
     # Get team info
     team_data = raw_event.get("team", {}) or {}
@@ -350,10 +467,11 @@ def _normalize_key_event(
     participants = raw_event.get("participants", [])
     player_name = ""
     for p in participants:
-        if p.get("type") == "player" or p.get("athlete"):
-            athlete = p.get("athlete", p)
+        athlete = p.get("athlete", p)
+        if athlete:
             player_name = athlete.get("fullName") or athlete.get("displayName", "")
-            break
+            if player_name:
+                break
     
     if not player_name:
         # Try direct player field
@@ -363,26 +481,41 @@ def _normalize_key_event(
     # Map event type
     event_type = KEY_EVENTS_TYPE_MAPPING.get(event_type_raw, "unknown")
     
-    # Fallback: try to infer from description
+    # Fallback: try to infer from description and type text
     if event_type == "unknown" and description:
         desc_lower = description.lower()
-        if "goal" in desc_lower:
+        type_text = type_info.get("text", "").lower()
+        
+        if "goal" in desc_lower or type_text == "goal":
             event_type = "goal"
-        elif "yellow card" in desc_lower or "tarjeta amarilla" in desc_lower:
+        elif "own goal" in desc_lower or type_text == "own-goal":
+            event_type = "own_goal"
+        elif "yellow card" in desc_lower or "tarjeta amarilla" in desc_lower or type_text == "yellow-card":
             event_type = "yellow_card"
-        elif "red card" in desc_lower or "tarjeta roja" in desc_lower:
+        elif "red card" in desc_lower or "tarjeta roja" in desc_lower or type_text == "red-card":
             event_type = "red_card"
-        elif "substitution" in desc_lower or "cambio" in desc_lower:
+        elif "substitution" in desc_lower or "cambio" in desc_lower or type_text == "substitution":
             event_type = "substitution"
-    
-    # Build clock display
-    clock_display = f"{minute}'" if minute else None
+        elif "corner" in desc_lower or type_text == "corner":
+            event_type = "corner"
+        elif "offside" in desc_lower or type_text == "offside":
+            event_type = "offside"
+        elif "foul" in desc_lower or type_text == "foul":
+            event_type = "foul"
+        elif "kickoff" in type_text or "start of first half" in desc_lower:
+            event_type = "kickoff"
+        elif "half-time" in type_text or "first half ends" in desc_lower:
+            event_type = "halftime"
+        elif "full-time" in type_text or "match ends" in desc_lower:
+            event_type = "fulltime"
+        elif "second half" in type_text or "second half begins" in desc_lower:
+            event_type = "second_half_start"
     
     return {
         "event_id": event_id,
         "sequence_index": sequence_index,
-        "minute": int(minute) if isinstance(minute, (int, float)) else 0,
-        "clock_display": clock_display,
+        "minute": minute,
+        "clock_display": clock_display if clock_display else None,
         "period": int(period) if isinstance(period, (int, float)) else 1,
         "event_type": event_type,
         "team_name": team_name or None,
