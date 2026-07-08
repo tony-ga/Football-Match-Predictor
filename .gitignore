@@ -1,4 +1,34 @@
 ```
-# Analysis output files
-predicciones/output/analysis/
+# Output directories
+predicciones/output/
+
+# Environment and cache files
+.env
+.env.local
+.env.*
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Coverage and testing
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
 ```
