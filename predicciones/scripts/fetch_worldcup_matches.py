@@ -169,61 +169,102 @@ class MatchFetcher:
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
         max_matches: Optional[int] = None,
+        verbose: bool = False,
     ) -> List[Dict[str, Any]]:
         """
-        Fetch match list from scoreboard endpoint.
+        Fetch match list from scoreboard endpoint by iterating day by day.
         
         Args:
             from_date: Start date for range
             to_date: End date for range
             max_matches: Maximum number of matches to return
+            verbose: Print detailed progress
             
         Returns:
             List of match info dictionaries with event_id, date, teams, etc.
         """
         logger.info("Fetching match list from scoreboard...")
         
-        # Build dates parameter
-        dates_param = None
-        if from_date and to_date:
-            # Format: YYYYMMDD-YYYYMMDD
-            dates_param = f"{from_date.strftime('%Y%m%d')}-{to_date.strftime('%Y%m%d')}"
-        elif from_date:
-            dates_param = from_date.strftime('%Y%m%d')
-        elif to_date:
-            dates_param = to_date.strftime('%Y%m%d')
+        # Determine date range
+        if not from_date:
+            from_date = datetime.now() - timedelta(days=365)
+        if not to_date:
+            to_date = datetime.now()
         
-        # Fetch scoreboard
-        scoreboard_data = self.client.get_scoreboard(dates=dates_param, limit=max_matches or 500)
+        # Collect all events by iterating day by day
+        # ESPN API doesn't support date ranges in the format YYYYMMDD-YYYYMMDD
+        # We need to query each day individually
+        all_events = []
+        seen_event_ids = set()
+        current_date = from_date
+        days_queried = 0
+        raw_events_count = 0
         
-        if not scoreboard_data:
-            logger.warning("Empty scoreboard response")
-            return []
-        
-        # Extract events
-        events = scoreboard_data.get("events", [])
-        self.stats["total_found"] = len(events)
-        
-        logger.info(f"Found {len(events)} matches in scoreboard")
-        
-        # Normalize and filter events
-        matches = []
-        for event in events:
+        while current_date <= to_date:
+            date_str = current_date.strftime("%Y-%m-%d")
+            dates_param = current_date.strftime("%Y%m%d")
+            
+            if verbose:
+                print(f"Fetching scoreboard for {date_str}...")
+            
+            logger.info(f"Fetching scoreboard for {date_str} (dates={dates_param})")
+            
             try:
-                normalized = self.client._normalize_event(event)
-                if normalized and normalized.get("event_id"):
-                    matches.append(normalized)
+                # Fetch scoreboard for this specific date
+                scoreboard_data = self.client.get_scoreboard(dates=dates_param, limit=500)
+                
+                if scoreboard_data:
+                    events = scoreboard_data.get("events", [])
+                    raw_events_count += len(events)
+                    
+                    if verbose and events:
+                        print(f"  Found {len(events)} events")
+                    
+                    # Process and deduplicate events
+                    for event in events:
+                        try:
+                            normalized = self.client._normalize_event(event)
+                            if normalized and normalized.get("event_id"):
+                                event_id = normalized["event_id"]
+                                if event_id not in seen_event_ids:
+                                    seen_event_ids.add(event_id)
+                                    all_events.append(normalized)
+                        except Exception as e:
+                            logger.warning(f"Error normalizing event: {e}")
+                else:
+                    if verbose:
+                        print(f"  No events found")
+                    
             except Exception as e:
-                logger.warning(f"Error normalizing event: {e}")
-        
-        # Apply max_matches limit
-        if max_matches and len(matches) > max_matches:
-            matches = matches[:max_matches]
+                logger.warning(f"Error fetching scoreboard for {date_str}: {e}")
+                # Continue with next day instead of failing completely
+            
+            days_queried += 1
+            current_date += timedelta(days=1)
+            
+            # Small delay to avoid rate limiting
+            time.sleep(0.2)
         
         # Sort by date
-        matches.sort(key=lambda x: x.get("date", ""), reverse=True)
+        all_events.sort(key=lambda x: x.get("date", ""), reverse=True)
         
-        return matches
+        # Apply max_matches limit
+        if max_matches and len(all_events) > max_matches:
+            all_events = all_events[:max_matches]
+        
+        self.stats["total_found"] = len(all_events)
+        
+        logger.info(f"Days queried: {days_queried}")
+        logger.info(f"Raw events collected: {raw_events_count}")
+        logger.info(f"Unique match_ids discovered: {len(all_events)}")
+        
+        if verbose:
+            print(f"\n=== Scoreboard Discovery Complete ===")
+            print(f"Days queried: {days_queried}")
+            print(f"Raw events collected: {raw_events_count}")
+            print(f"Unique match_ids discovered: {len(all_events)}")
+        
+        return all_events
     
     def fetch_and_cache_matches(
         self,
@@ -251,6 +292,7 @@ class MatchFetcher:
             from_date=from_date,
             to_date=to_date,
             max_matches=max_matches,
+            verbose=verbose,
         )
         
         if not matches:
