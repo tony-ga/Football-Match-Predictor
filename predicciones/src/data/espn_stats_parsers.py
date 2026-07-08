@@ -947,7 +947,7 @@ def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dic
         if play_type_text.startswith("goal") or "goal" in play_type_text:
             # Check for overturned goals
             if "overturned" in text_lower or "no goal" in text_lower or "cancelled" in play_type_text:
-                event_type = "unknown"  # VAR overturned
+                event_type = "goal_overturned"  # VAR overturned
             # Check for own goal
             elif "own goal" in text_lower or play_type_text == "own goal":
                 event_type = "own_goal"
@@ -966,13 +966,13 @@ def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dic
         elif play_type_text == "red card" or "red card" in text_lower:
             event_type = "red_card"
         # Corners
-        elif play_type_text == "corner awarded" or ("corner" in text_lower and "conceded" in text_lower):
+        elif play_type_text == "corner awarded" or "corner" in text_lower:
             event_type = "corner"
         # Substitutions
         elif play_type_text == "substitution" or "substitution" in text_lower:
             event_type = "substitution"
         # Halftime
-        elif play_type_text == "halftime" or "first half ends" in text_lower:
+        elif play_type_text == "halftime" or "first half ends" in text_lower or "half-time" in text_lower:
             event_type = "halftime"
         # Fulltime
         elif play_type_text == "fulltime" or "second half ends" in text_lower or "match ends" in text_lower:
@@ -983,6 +983,56 @@ def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dic
         # First half start / kickoff
         elif "first half begins" in text_lower or "kickoff" in text_lower:
             event_type = "kickoff"
+        # Offside
+        elif "offside" in text_lower:
+            event_type = "offside"
+        # Foul
+        elif "foul" in text_lower:
+            event_type = "foul"
+        # Free kick
+        elif "free kick" in text_lower:
+            event_type = "free_kick"
+        # Injury/delay
+        elif "delay" in text_lower or "injury" in text_lower:
+            event_type = "injury_delay"
+        # Shot on target
+        elif "shot on target" in text_lower or "save" in text_lower:
+            event_type = "shot_on_target"
+        # Shot off target
+        elif "shot" in text_lower and ("off target" in text_lower or "blocked" in text_lower):
+            event_type = "shot_off_target"
+        # Attempt missed (shots that miss)
+        elif "attempt missed" in text_lower:
+            event_type = "shot_off_target"
+        # Hit woodwork (post/bar)
+        elif "hits the" in text_lower and ("post" in text_lower or "bar" in text_lower):
+            event_type = "hit_woodwork"
+        # Added time announcement
+        elif "added time" in text_lower or "minutes of added time" in text_lower:
+            event_type = "added_time_announced"
+        # Lineups announced
+        elif "lineups" in text_lower and "announced" in text_lower:
+            event_type = "lineups_announced"
+        # Extra time periods
+        elif "extra time begins" in text_lower:
+            if "first half" in text_lower:
+                event_type = "extra_time_first_half_start"
+            elif "second half" in text_lower:
+                event_type = "extra_time_second_half_start"
+        elif "extra time ends" in text_lower:
+            if "first half" in text_lower:
+                event_type = "extra_time_first_half_end"
+            elif "second half" in text_lower:
+                event_type = "extra_time_second_half_end"  # This is effectively fulltime for extra time matches
+        # VAR decisions
+        elif "var decision" in text_lower:
+            event_type = "var_decision"
+        # Handball
+        elif "handball" in text_lower:
+            event_type = "handball"
+        # Attempt blocked
+        elif "attempt blocked" in text_lower or "blocked" in text_lower:
+            event_type = "shot_blocked"
         
         # If we detected an event type, add it to the list
         if event_type:
