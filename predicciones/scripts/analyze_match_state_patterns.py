@@ -11,6 +11,9 @@ Key Features:
 - Create temporal windows anchored to events or fixed intervals
 - Quantify pattern transitions (e.g., "trailing by 1 after 60' -> more corners")
 - Generate Markov-ready transition datasets
+- Load ALL cached matches + optionally fetch missing from API
+- Data quality validation and coverage reporting
+- Temporal ordering for walk-forward validation
 
 Data Sources:
 - commentary: Minute-by-minute event timeline
@@ -27,10 +30,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
+import csv
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta, UTC
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
+from pathlib import Path
 import math
 
 logger = logging.getLogger(__name__)
