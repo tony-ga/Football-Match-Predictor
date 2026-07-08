@@ -1,5 +1,4 @@
-Nothing should be ignored in this case, as the only change is a modification to a Python source file (`predicciones/scripts/fetch_worldcup_matches.py`) without any build artifacts, dependencies, or temporary files present in the change list. Therefore, the output is empty.
-
-```python
-
+```
+# Generated from detected output files
+predicciones/output/
 ```
