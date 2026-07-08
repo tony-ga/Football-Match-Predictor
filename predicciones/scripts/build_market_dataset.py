@@ -369,6 +369,8 @@ class MarketDatasetBuilder:
         # Extract and accumulate events (for first/last corner/card analysis)
         # Use the new function that returns both events and stats
         commentary = summary.get("commentary", [])
+        match_date = event.get("date", "")
+        
         if commentary and isinstance(commentary, list):
             self.total_commentary_count += len(commentary)
             events_list, event_type_counts = parse_commentary_events_with_stats(commentary)
@@ -378,19 +380,54 @@ class MarketDatasetBuilder:
             for etype, count in event_type_counts.items():
                 self.aggregated_event_type_counts[etype] = \
                     self.aggregated_event_type_counts.get(etype, 0) + count
+            
+            # UNWIND: Write each event as a separate row (event-per-row format)
+            for seq_idx, evt in enumerate(events_list):
+                event_record = {
+                    "event_id": event_id,
+                    "match_date": match_date,
+                    "sequence_index": seq_idx,
+                    "minute": evt.get("minute"),
+                    "period": evt.get("period"),
+                    "event_type": evt.get("event_type"),
+                    "team_name": evt.get("team_name"),
+                    "team_abbr": None,  # Will be populated if available
+                    "player_name": evt.get("player_name"),
+                    "description": evt.get("description"),
+                    "raw_event": evt.get("raw_event"),
+                }
+                
+                # Try to extract team abbreviation from raw_event
+                raw_evt = evt.get("raw_event", {})
+                if isinstance(raw_evt, dict):
+                    play = raw_evt.get("play", {})
+                    if isinstance(play, dict):
+                        team = play.get("team", {})
+                        if isinstance(team, dict):
+                            event_record["team_abbr"] = team.get("abbreviation") or team.get("abbr")
+                
+                self.event_rows.append(event_record)
         else:
             # Fallback to old method for non-soccer sports
             events_list = extract_events_from_summary(summary)
             if events_list:
                 self.total_parsed_event_count += len(events_list)
-        
-        if events_list:
-            events_record = {
-                "event_id": event_id,
-                "date": event.get("date", ""),
-                "events": events_list,
-            }
-            self.event_rows.append(events_record)
+                # Also unwind fallback events
+                for seq_idx, evt in enumerate(events_list):
+                    event_record = {
+                        "event_id": event_id,
+                        "match_date": match_date,
+                        "sequence_index": seq_idx,
+                        "minute": evt.get("minute"),
+                        "period": evt.get("period"),
+                        "event_type": evt.get("event_type"),
+                        "team_name": evt.get("team_name"),
+                        "team_abbr": evt.get("team_abbr"),
+                        "player_name": evt.get("player_name"),
+                        "description": evt.get("description"),
+                        "raw_event": evt.get("raw_event"),
+                    }
+                    self.event_rows.append(event_record)
 
 
 def main():

@@ -943,13 +943,22 @@ def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dic
         # Event type detection logic
         # Priority: explicit play type > text keywords
         
-        # Goals
+        # Goals - check for penalty goal, own goal, regular goal
         if play_type_text.startswith("goal") or "goal" in play_type_text:
             # Check for overturned goals
             if "overturned" in text_lower or "no goal" in text_lower or "cancelled" in play_type_text:
                 event_type = "unknown"  # VAR overturned
+            # Check for own goal
+            elif "own goal" in text_lower or play_type_text == "own goal":
+                event_type = "own_goal"
+            # Check for penalty goal
+            elif "penalty" in text_lower or play_type_text == "penalty goal" or "penalty kick" in play_type_text:
+                event_type = "penalty_goal"
             else:
                 event_type = "goal"
+        # Penalty awarded (not yet taken)
+        elif play_type_text == "penalty" or ("penalty" in text_lower and "awarded" in text_lower):
+            event_type = "penalty"
         # Yellow cards
         elif play_type_text == "yellow card" or "yellow card" in text_lower:
             event_type = "yellow_card"
@@ -971,9 +980,9 @@ def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dic
         # Second half start
         elif "second half begins" in text_lower:
             event_type = "second_half_start"
-        # First half start
-        elif "first half begins" in text_lower:
-            event_type = "first_half_start"
+        # First half start / kickoff
+        elif "first half begins" in text_lower or "kickoff" in text_lower:
+            event_type = "kickoff"
         
         # If we detected an event type, add it to the list
         if event_type:
