@@ -329,5 +329,150 @@ class TestExtractEventsFromSummary:
         assert extract_events_from_summary({}) == []
 
 
+class TestEventPerRowFormat:
+    """Tests for the event-per-row format in match_events.jsonl."""
+    
+    def test_goal_event_has_all_fields(self):
+        """Test that goal events have all required fields for event-per-row format."""
+        events, _ = parse_commentary_events_with_stats(MOCK_COMMENTARY_GOAL)
+        
+        assert len(events) == 1
+        evt = events[0]
+        
+        # Check all fields needed for event-per-row format
+        assert evt["event_type"] == "goal"
+        assert evt["minute"] is not None
+        assert evt["period"] is not None
+        assert evt["team_name"] is not None
+        assert evt["player_name"] is not None
+        assert evt["description"] is not None
+        assert "raw_event" in evt
+    
+    def test_penalty_goal_detection(self):
+        """Test detection of penalty goals."""
+        mock_penalty_goal = [
+            {
+                "sequence": 50,
+                "time": {"value": 3600.0, "displayValue": "60'"},
+                "text": "Goal! Brazil 1, Croatia 0. Neymar (Brazil) converts the penalty.",
+                "play": {
+                    "type": {"id": "138", "text": "Penalty Goal", "type": "penalty-goal"},
+                    "period": {"number": 2},
+                    "team": {"displayName": "Brazil"},
+                    "participants": [{"athlete": {"displayName": "Neymar"}}],
+                }
+            }
+        ]
+        
+        events, counts = parse_commentary_events_with_stats(mock_penalty_goal)
+        
+        assert len(events) == 1
+        assert events[0]["event_type"] == "penalty_goal"
+        assert "penalty_goal" in counts
+    
+    def test_own_goal_detection(self):
+        """Test detection of own goals."""
+        mock_own_goal = [
+            {
+                "sequence": 30,
+                "time": {"value": 1800.0, "displayValue": "30'"},
+                "text": "Own Goal! France 0, Germany 1. Jules Koundé (France) scores an own goal.",
+                "play": {
+                    "type": {"id": "139", "text": "Own Goal", "type": "own-goal"},
+                    "period": {"number": 1},
+                    "team": {"displayName": "France"},
+                    "participants": [{"athlete": {"displayName": "Jules Koundé"}}],
+                }
+            }
+        ]
+        
+        events, counts = parse_commentary_events_with_stats(mock_own_goal)
+        
+        assert len(events) == 1
+        assert events[0]["event_type"] == "own_goal"
+        assert "own_goal" in counts
+    
+    def test_kickoff_detection(self):
+        """Test detection of kickoff events."""
+        mock_kickoff = [
+            {
+                "sequence": 1,
+                "time": {"value": 0.0, "displayValue": "0'"},
+                "text": "First Half begins.",
+                "play": {
+                    "type": {"id": "1", "text": "Kickoff", "type": "kickoff"},
+                    "period": {"number": 1},
+                }
+            }
+        ]
+        
+        events, counts = parse_commentary_events_with_stats(mock_kickoff)
+        
+        assert len(events) == 1
+        assert events[0]["event_type"] == "kickoff"
+        assert "kickoff" in counts
+    
+    def test_second_half_start_detection(self):
+        """Test detection of second half start events."""
+        mock_second_half = [
+            {
+                "sequence": 49,
+                "time": {"value": 2700.0, "displayValue": "45'"},
+                "text": "Second Half begins.",
+                "play": {
+                    "type": {"id": "80", "text": "Second Half Start", "type": "second-half-start"},
+                    "period": {"number": 2},
+                }
+            }
+        ]
+        
+        events, counts = parse_commentary_events_with_stats(mock_second_half)
+        
+        assert len(events) == 1
+        assert events[0]["event_type"] == "second_half_start"
+        assert "second_half_start" in counts
+    
+    def test_penalty_awarded_detection(self):
+        """Test detection of penalty awarded (not yet taken)."""
+        mock_penalty_awarded = [
+            {
+                "sequence": 45,
+                "time": {"value": 3300.0, "displayValue": "55'"},
+                "text": "Penalty awarded to Spain after VAR review.",
+                "play": {
+                    "type": {"id": "96", "text": "Penalty", "type": "penalty"},
+                    "period": {"number": 2},
+                    "team": {"displayName": "Spain"},
+                }
+            }
+        ]
+        
+        events, counts = parse_commentary_events_with_stats(mock_penalty_awarded)
+        
+        assert len(events) == 1
+        assert events[0]["event_type"] == "penalty"
+        assert "penalty" in counts
+    
+    def test_null_values_for_missing_fields(self):
+        """Test that missing team/player names result in null values, not discarded events."""
+        mock_minimal_event = [
+            {
+                "sequence": 5,
+                "time": {"value": 300.0, "displayValue": "5'"},
+                "text": "Some generic event description without team info.",
+                "play": {}
+            }
+        ]
+        
+        events, counts = parse_commentary_events_with_stats(mock_minimal_event)
+        
+        # Event should be preserved even with missing info
+        assert len(events) == 1
+        assert events[0]["event_type"] == "unknown"
+        assert events[0]["team_name"] is None
+        assert events[0]["player_name"] is None
+        assert "raw_event" in events[0]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
