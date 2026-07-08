@@ -748,6 +748,9 @@ def extract_events_from_summary(summary: Dict[str, Any]) -> List[Dict[str, Any]]
     - first card
     - race to X corners
     
+    For soccer, ESPN provides event data in the 'commentary' field,
+    not in 'plays' or 'playByPlay'.
+    
     Args:
         summary: Raw ESPN summary JSON
         
@@ -759,7 +762,15 @@ def extract_events_from_summary(summary: Dict[str, Any]) -> List[Dict[str, Any]]
     if not summary:
         return events
     
-    # Look for plays or events
+    # SOCCER: Use commentary as the primary source for event data
+    # ESPN soccer API provides detailed play-by-play in 'commentary'
+    commentary = summary.get("commentary", [])
+    if commentary and isinstance(commentary, list):
+        parsed_events, _ = _parse_commentary_events(commentary)
+        if parsed_events:
+            return parsed_events
+    
+    # FALLBACK: Try plays/playByPlay for other sports
     plays = summary.get("plays", [])
     if not plays:
         # Try competitions[0].plays
@@ -831,6 +842,174 @@ def extract_events_from_summary(summary: Dict[str, Any]) -> List[Dict[str, Any]]
     events.sort(key=sort_key)
     
     return events
+
+
+def parse_commentary_events_with_stats(commentary: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """
+    Public wrapper for _parse_commentary_events.
+    
+    Parse ESPN soccer commentary into structured match events with statistics.
+    
+    Args:
+        commentary: List of commentary items from ESPN API
+        
+    Returns:
+        Tuple of (list of parsed event dicts, event_type_counts dict)
+    """
+    return _parse_commentary_events(commentary)
+
+
+def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """
+    Parse ESPN soccer commentary into structured match events.
+    
+    Commentary items have this structure:
+    {
+        "sequence": int,
+        "time": {"value": float (seconds), "displayValue": str (e.g., "5'")},
+        "text": str,
+        "play": {...}  # optional detailed play info
+    }
+    
+    Args:
+        commentary: List of commentary items from ESPN API
+        
+    Returns:
+        Tuple of (list of parsed event dicts with standardized fields, event_type_counts dict)
+    """
+    events = []
+    event_type_counts: Dict[str, int] = {}
+    
+    for item in commentary:
+        if not isinstance(item, dict):
+            continue
+        
+        # Extract basic info
+        sequence = item.get("sequence", 0)
+        time_info = item.get("time", {})
+        time_value = time_info.get("value", 0) if isinstance(time_info, dict) else 0
+        time_display = time_info.get("displayValue", "") if isinstance(time_info, dict) else ""
+        text = item.get("text", "")
+        
+        # Get nested play data if available
+        play = item.get("play", {})
+        if not isinstance(play, dict):
+            play = {}
+        
+        # Determine period from play or infer from time
+        period = 1
+        if play.get("period"):
+            period = play.get("period", {}).get("number", 1)
+        elif time_value > 2700:  # After 45 minutes (2700 seconds)
+            period = 2
+        elif time_value > 6300:  # After 75 minutes + extra time
+            period = 3  # Extra time first half
+        elif time_value > 8100:  # After 105 minutes
+            period = 4  # Extra time second half
+        
+        # Calculate minute from time value (seconds)
+        minute = int(time_value / 60) if time_value else 0
+        
+        # Detect event type from text and play type
+        event_type = None
+        team_name = None
+        player_name = None
+        description = text
+        
+        # Extract team name from play.team.displayName or from text
+        team_data = play.get("team", {})
+        if isinstance(team_data, dict):
+            team_name = team_data.get("displayName")
+        
+        # Extract participant/player info
+        participants = play.get("participants", [])
+        if participants and isinstance(participants, list):
+            first_participant = participants[0]
+            if isinstance(first_participant, dict):
+                athlete = first_participant.get("athlete", {})
+                if isinstance(athlete, dict):
+                    player_name = athlete.get("displayName")
+        
+        # Get play type for more accurate classification
+        play_type_obj = play.get("type", {})
+        play_type_text = ""
+        play_type_id = ""
+        if isinstance(play_type_obj, dict):
+            play_type_text = play_type_obj.get("text", "").lower()
+            play_type_id = play_type_obj.get("id", "")
+        
+        text_lower = text.lower()
+        
+        # Event type detection logic
+        # Priority: explicit play type > text keywords
+        
+        # Goals
+        if play_type_text.startswith("goal") or "goal" in play_type_text:
+            # Check for overturned goals
+            if "overturned" in text_lower or "no goal" in text_lower or "cancelled" in play_type_text:
+                event_type = "unknown"  # VAR overturned
+            else:
+                event_type = "goal"
+        # Yellow cards
+        elif play_type_text == "yellow card" or "yellow card" in text_lower:
+            event_type = "yellow_card"
+        # Red cards  
+        elif play_type_text == "red card" or "red card" in text_lower:
+            event_type = "red_card"
+        # Corners
+        elif play_type_text == "corner awarded" or ("corner" in text_lower and "conceded" in text_lower):
+            event_type = "corner"
+        # Substitutions
+        elif play_type_text == "substitution" or "substitution" in text_lower:
+            event_type = "substitution"
+        # Halftime
+        elif play_type_text == "halftime" or "first half ends" in text_lower:
+            event_type = "halftime"
+        # Fulltime
+        elif play_type_text == "fulltime" or "second half ends" in text_lower or "match ends" in text_lower:
+            event_type = "fulltime"
+        # Second half start
+        elif "second half begins" in text_lower:
+            event_type = "second_half_start"
+        # First half start
+        elif "first half begins" in text_lower:
+            event_type = "first_half_start"
+        
+        # If we detected an event type, add it to the list
+        if event_type:
+            event_record = {
+                "event_type": event_type,
+                "minute": minute,
+                "period": period,
+                "team_name": team_name,
+                "player_name": player_name,
+                "description": description,
+                "raw_event": item,
+            }
+            events.append(event_record)
+            event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
+        elif text_lower.strip():
+            # Keep unmatched events with raw data for debugging
+            # Mark as unknown but preserve all info
+            event_record = {
+                "event_type": "unknown",
+                "minute": minute,
+                "period": period,
+                "team_name": team_name,
+                "player_name": player_name,
+                "description": description,
+                "raw_event": item,
+            }
+            events.append(event_record)
+            event_type_counts["unknown"] = event_type_counts.get("unknown", 0) + 1
+    
+    # Sort by period then minute
+    def sort_key(e):
+        return (e.get("period", 1), e.get("minute", 0))
+    
+    events.sort(key=sort_key)
+    
+    return events, event_type_counts
 
 
 def _apply_pattern_matching(stats: Dict[str, Any], prefix: str, name: str, value: Optional[float]) -> None:

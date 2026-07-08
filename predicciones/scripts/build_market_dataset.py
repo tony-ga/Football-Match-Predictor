@@ -28,6 +28,7 @@ from src.data.espn_stats_parsers import (
     extract_team_stats_from_summary,
     extract_player_stats_from_summary,
     extract_events_from_summary,
+    parse_commentary_events_with_stats,
 )
 from src.utils.config_paths import DERIVED_DIR, ESPN_CACHE_DIR, PROJECT_ROOT
 
@@ -105,6 +106,11 @@ class MarketDatasetBuilder:
         self.matches_with_cards = 0
         self.matches_with_sot = 0
         self.matches_with_players = 0
+        
+        # Event logging counters
+        self.total_commentary_count = 0
+        self.total_parsed_event_count = 0
+        self.aggregated_event_type_counts: Dict[str, int] = {}
         
         # Accumulators for batch writing
         self.team_rows: List[Dict[str, Any]] = []
@@ -196,6 +202,11 @@ class MarketDatasetBuilder:
         logger.info(f"Matches with cards: {self.matches_with_cards}")
         logger.info(f"Matches with SOT: {self.matches_with_sot}")
         logger.info(f"Matches with player stats: {self.matches_with_players}")
+        logger.info("-" * 50)
+        logger.info("Match Events Logging")
+        logger.info(f"Total commentary entries processed: {self.total_commentary_count}")
+        logger.info(f"Total parsed events: {self.total_parsed_event_count}")
+        logger.info(f"Event type counts: {self.aggregated_event_type_counts}")
         logger.info("=" * 50)
         
         # Write all accumulated data to files
@@ -207,6 +218,9 @@ class MarketDatasetBuilder:
             "with_cards": self.matches_with_cards,
             "with_sot": self.matches_with_sot,
             "with_players": self.matches_with_players,
+            "commentary_count": self.total_commentary_count,
+            "parsed_event_count": self.total_parsed_event_count,
+            "event_type_counts": self.aggregated_event_type_counts,
         }
     
     def _write_all_data(self) -> None:
@@ -353,7 +367,23 @@ class MarketDatasetBuilder:
             self.matches_with_players += 1
         
         # Extract and accumulate events (for first/last corner/card analysis)
-        events_list = extract_events_from_summary(summary)
+        # Use the new function that returns both events and stats
+        commentary = summary.get("commentary", [])
+        if commentary and isinstance(commentary, list):
+            self.total_commentary_count += len(commentary)
+            events_list, event_type_counts = parse_commentary_events_with_stats(commentary)
+            self.total_parsed_event_count += len(events_list)
+            
+            # Aggregate event type counts
+            for etype, count in event_type_counts.items():
+                self.aggregated_event_type_counts[etype] = \
+                    self.aggregated_event_type_counts.get(etype, 0) + count
+        else:
+            # Fallback to old method for non-soccer sports
+            events_list = extract_events_from_summary(summary)
+            if events_list:
+                self.total_parsed_event_count += len(events_list)
+        
         if events_list:
             events_record = {
                 "event_id": event_id,
