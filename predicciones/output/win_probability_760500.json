@@ -1,0 +1,19 @@
+{
+  "event_id": "760500",
+  "league": "fifa.world",
+  "match": {
+    "short_name": "",
+    "date": "",
+    "status": "",
+    "home_team": "",
+    "away_team": "",
+    "home_score": null,
+    "away_score": null
+  },
+  "predictor": {
+    "available": false,
+    "home_team_win_percentage": null,
+    "away_team_win_percentage": null,
+    "tie_percentage": null
+  }
+}
