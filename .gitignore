@@ -1,34 +1,5 @@
-```
-# Output directories
-predicciones/output/
+Nothing should be ignored in this case, as the only change is a modification to a Python source file (`predicciones/scripts/fetch_worldcup_matches.py`) without any build artifacts, dependencies, or temporary files present in the change list. Therefore, the output is empty.
 
-# Environment and cache files
-.env
-.env.local
-.env.*
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+```python
 
-# Logs and temporary files
-*.log
-*.tmp
-*.swp
-
-# Editors
-.vscode/
-.idea/
-
-# Dependencies
-.venv/
-venv/
-node_modules/
-
-# Coverage and testing
-.coverage
-coverage/
-htmlcov/
-.pytest_cache/
-.mypy_cache/
 ```
