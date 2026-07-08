@@ -473,6 +473,147 @@ class TestEventPerRowFormat:
         assert events[0]["team_name"] is None
         assert events[0]["player_name"] is None
         assert "raw_event" in events[0]
+    
+    def test_fulltime_not_at_beginning_after_sort(self):
+        """Test that fulltime event is sorted to the end, not at the beginning."""
+        # Simulate the bug scenario: fulltime with minute=0 appearing early in raw data
+        mock_problematic_order = [
+            {
+                "sequence": 2,
+                "time": {"value": 0.0, "displayValue": "0'"},
+                "text": "Match ends, Team A 2, Team B 1.",
+                "play": {"type": {"id": "82", "text": "Fulltime", "type": "fulltime"}}
+            },
+            {
+                "sequence": 0,
+                "time": {"value": 0.0, "displayValue": "0'"},
+                "text": "Lineups announced.",
+                "play": {"type": {"id": "1", "text": "Lineups", "type": "lineups"}}
+            },
+            {
+                "sequence": 1,
+                "time": {"value": 0.0, "displayValue": "0'"},
+                "text": "First Half begins.",
+                "play": {"type": {"id": "1", "text": "Kickoff", "type": "kickoff"}}
+            },
+            {
+                "sequence": 10,
+                "time": {"value": 900.0, "displayValue": "15'"},
+                "text": "Goal! Team A 1, Team B 0.",
+                "play": {"type": {"id": "137", "text": "Goal", "type": "goal"}, "period": {"number": 1}}
+            },
+            {
+                "sequence": 50,
+                "time": {"value": 2700.0, "displayValue": "45'"},
+                "text": "First Half ends, Team A 1, Team B 0.",
+                "play": {"type": {"id": "81", "text": "Halftime", "type": "halftime"}}
+            },
+            {
+                "sequence": 51,
+                "time": {"value": 2700.0, "displayValue": "45'"},
+                "text": "Second Half begins.",
+                "play": {"type": {"id": "80", "text": "Second Half Start", "type": "second-half-start"}}
+            },
+            {
+                "sequence": 60,
+                "time": {"value": 3600.0, "displayValue": "60'"},
+                "text": "Goal! Team A 2, Team B 0.",
+                "play": {"type": {"id": "137", "text": "Goal", "type": "goal"}, "period": {"number": 2}}
+            },
+        ]
+        
+        events, _ = parse_commentary_events_with_stats(mock_problematic_order)
+        
+        # Should have all events
+        assert len(events) == 7
+        
+        # First event should be lineups_announced (pre-match)
+        assert events[0]["event_type"] == "lineups_announced", f"First event should be lineups, got {events[0]['event_type']}"
+        
+        # Second event should be kickoff
+        assert events[1]["event_type"] == "kickoff", f"Second event should be kickoff, got {events[1]['event_type']}"
+        
+        # Last event MUST be fulltime
+        assert events[-1]["event_type"] == "fulltime", f"Last event should be fulltime, got {events[-1]['event_type']}"
+        
+        # Fulltime should NOT be at position 0, 1, or 2
+        for i in range(3):
+            assert events[i]["event_type"] != "fulltime", f"Fulltime incorrectly at position {i}"
+    
+    def test_halftime_before_second_half_start(self):
+        """Test that halftime comes before second_half_start in sorted order."""
+        mock_halftime_sequence = [
+            {
+                "sequence": 51,
+                "time": {"value": 2700.0, "displayValue": "45'"},
+                "text": "Second Half begins.",
+                "play": {"type": {"id": "80", "text": "Second Half Start"}}
+            },
+            {
+                "sequence": 50,
+                "time": {"value": 2700.0, "displayValue": "45'+7'"},
+                "text": "First Half ends, Team A 1, Team B 0.",
+                "play": {"type": {"id": "81", "text": "Halftime"}}
+            },
+        ]
+        
+        events, _ = parse_commentary_events_with_stats(mock_halftime_sequence)
+        
+        assert len(events) == 2
+        # Halftime should come before second_half_start
+        assert events[0]["event_type"] == "halftime", f"First should be halftime, got {events[0]['event_type']}"
+        assert events[1]["event_type"] == "second_half_start", f"Second should be second_half_start, got {events[1]['event_type']}"
+    
+    def test_source_index_preserved(self):
+        """Test that source_index is preserved in parsed events."""
+        mock_events = [
+            {
+                "sequence": 10,
+                "time": {"value": 600.0, "displayValue": "10'"},
+                "text": "Goal!",
+                "play": {"type": {"text": "Goal"}}
+            },
+            {
+                "sequence": 20,
+                "time": {"value": 1200.0, "displayValue": "20'"},
+                "text": "Corner.",
+                "play": {"type": {"text": "Corner Awarded"}}
+            },
+        ]
+        
+        events, _ = parse_commentary_events_with_stats(mock_events)
+        
+        assert len(events) == 2
+        assert events[0]["source_index"] == 0
+        assert events[1]["source_index"] == 1
+    
+    def test_first_goal_not_fulltime(self):
+        """Test that first_goal calculation doesn't pick up a misplaced fulltime event."""
+        mock_with_early_fulltime_bug = [
+            {
+                "sequence": 0,
+                "time": {"value": 0.0, "displayValue": "0'"},
+                "text": "Match ends, Team A 1, Team B 0.",
+                "play": {"type": {"text": "Fulltime"}}
+            },
+            {
+                "sequence": 10,
+                "time": {"value": 1200.0, "displayValue": "20'"},
+                "text": "Goal! Team A 1, Team B 0.",
+                "play": {"type": {"text": "Goal"}, "period": {"number": 1}}
+            },
+        ]
+        
+        events, _ = parse_commentary_events_with_stats(mock_with_early_fulltime_bug)
+        
+        # Find first goal
+        goal_events = [e for e in events if e["event_type"] == "goal"]
+        assert len(goal_events) >= 1
+        
+        # First goal should be at minute 20, not a fulltime event
+        first_goal = goal_events[0]
+        assert first_goal["minute"] == 20
+        assert first_goal["event_type"] == "goal"
 
 
 if __name__ == "__main__":

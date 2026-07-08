@@ -859,16 +859,122 @@ def parse_commentary_events_with_stats(commentary: List[Dict[str, Any]]) -> Tupl
     return _parse_commentary_events(commentary)
 
 
+def _get_event_order_priority(event_type: str) -> int:
+    """
+    Return a priority value for special events to ensure correct temporal ordering.
+    
+    Lower values = earlier in the match flow.
+    This is used as a secondary sort key when minute/period are equal or ambiguous.
+    
+    Priority order:
+    0: lineups_announced (pre-match)
+    1: kickoff (start of first half)
+    2-98: regular play events (goals, corners, cards, etc.)
+    99: halftime (end of first half)
+    100: second_half_start
+    101-198: second half play events
+    199: added_time_announced (late in match)
+    200: fulltime (end of match)
+    """
+    SPECIAL_ORDER = {
+        # Pre-match
+        "lineups_announced": 0,
+        
+        # First half start
+        "kickoff": 1,
+        
+        # First half end
+        "halftime": 99,
+        
+        # Second half start
+        "second_half_start": 100,
+        
+        # Late match announcements
+        "added_time_announced": 199,
+        
+        # Match end
+        "fulltime": 200,
+        
+        # Extra time (if applicable)
+        "extra_time_first_half_start": 201,
+        "extra_time_first_half_end": 250,
+        "extra_time_second_half_start": 251,
+        "extra_time_second_half_end": 300,
+    }
+    
+    return SPECIAL_ORDER.get(event_type, 50)  # Default to middle for regular events
+
+
+def _compute_sort_key(event: Dict[str, Any]) -> Tuple[int, int, int, int]:
+    """
+    Compute a robust sort key for temporal ordering of match events.
+    
+    This handles edge cases where:
+    - fulltime/halftime might have minute=0 or incorrect timestamps
+    - kickoff might appear after other events in raw data
+    - special events need to be positioned correctly regardless of source_index
+    
+    Sort key tuple: (period, adjusted_minute, event_priority, source_index)
+    
+    Args:
+        event: Event dict with period, minute, event_type, source_index
+        
+    Returns:
+        Tuple for sorting
+    """
+    period = event.get("period", 1)
+    minute = event.get("minute", 0)
+    event_type = event.get("event_type", "unknown")
+    source_index = event.get("source_index", 0)
+    
+    # Adjust minute for special events that should appear at specific positions
+    adjusted_minute = minute
+    event_priority = _get_event_order_priority(event_type)
+    
+    # Special handling for events that might have wrong minute values
+    if event_type == "kickoff":
+        # Kickoff should always be at minute 0 of its period
+        adjusted_minute = 0
+        # But it should come AFTER lineups_announced if both exist at minute 0
+        event_priority = 2  # Just after lineups
+    elif event_type == "halftime":
+        # Halftime marks end of first half - should come after all period 1 events
+        # If minute shows 0 or very low, use a high minute value for period 1
+        if minute < 45:
+            adjusted_minute = 45
+        event_priority = 99
+    elif event_type == "second_half_start":
+        # Second half start should be at minute 0 of period 2
+        adjusted_minute = 0
+        event_priority = 1  # Early in period 2, but after any period 2 kickoff
+    elif event_type == "fulltime":
+        # Fulltime should always be last - use max minute for its period
+        # Even if minute=0 in source, it goes to the end
+        adjusted_minute = 999  # Effectively \"infinite\" minute
+        event_priority = 200
+    elif event_type == "lineups_announced":
+        # Lineups always first, regardless of period/minute
+        period = 0  # Force to \"pre-period\"
+        adjusted_minute = 0
+        event_priority = 0
+    elif event_type == "added_time_announced":
+        # Added time announcement comes late in the match
+        # Keep original minute but boost priority
+        event_priority = 199
+    
+    return (period, adjusted_minute, event_priority, source_index)
+
+
 def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
     Parse ESPN soccer commentary into structured match events.
     
     Commentary items have this structure:
     {
-        "sequence": int,
-        "time": {"value": float (seconds), "displayValue": str (e.g., "5'")},
-        "text": str,
-        "play": {...}  # optional detailed play info
+        \"sequence\": int,
+        \"time\": {\"value\": float (seconds), \"displayValue\": str (e.g., \"5'\")},
+        \"text\": str,
+        \"play\": {...}  # optional detailed play info
     }
     
     Args:
@@ -880,7 +986,7 @@ def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dic
     events = []
     event_type_counts: Dict[str, int] = {}
     
-    for item in commentary:
+    for idx, item in enumerate(commentary):
         if not isinstance(item, dict):
             continue
         
@@ -1044,6 +1150,7 @@ def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dic
                 "player_name": player_name,
                 "description": description,
                 "raw_event": item,
+                "source_index": idx,  # Original index in commentary array
             }
             events.append(event_record)
             event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
@@ -1058,15 +1165,13 @@ def _parse_commentary_events(commentary: List[Dict[str, Any]]) -> Tuple[List[Dic
                 "player_name": player_name,
                 "description": description,
                 "raw_event": item,
+                "source_index": idx,  # Original index in commentary array
             }
             events.append(event_record)
             event_type_counts["unknown"] = event_type_counts.get("unknown", 0) + 1
     
-    # Sort by period then minute
-    def sort_key(e):
-        return (e.get("period", 1), e.get("minute", 0))
-    
-    events.sort(key=sort_key)
+    # Sort using robust temporal ordering that handles special events correctly
+    events.sort(key=_compute_sort_key)
     
     return events, event_type_counts
 
