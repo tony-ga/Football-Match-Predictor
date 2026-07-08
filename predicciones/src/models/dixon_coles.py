@@ -11,6 +11,8 @@ Key features over simple Poisson:
 - Temporal decay: more recent matches weighted more heavily in MLE.
 - Trainable attack/defense parameters per team.
 - Heuristic mode: estimates lambdas from features when no trained params available.
+- Markov-aware mode: optionally incorporates Markov state features for in-play
+  prediction (requires markov_features module to be loaded).
 """
 from __future__ import annotations
 
@@ -25,6 +27,21 @@ from scipy.special import gammaln
 from scipy.stats import poisson
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Optional Markov features integration
+# ---------------------------------------------------------------------------
+_MARKOV_AVAILABLE = False
+try:
+    from ..features.markov_features import (
+        get_markov_features,
+        build_state_from_match_context,
+        build_state_for_away_team,
+    )
+    _MARKOV_AVAILABLE = True
+except ImportError:
+    logger.debug("Markov features module not available; Markov-aware mode disabled")
 
 
 # ---------------------------------------------------------------------------
@@ -202,9 +219,11 @@ class DixonColesModel:
     """
     Dixon-Coles football match prediction model.
 
-    Two operating modes:
+    Three operating modes:
     1. Trained mode: uses MLE-estimated alpha/beta/gamma per team.
     2. Heuristic mode: estimates lambdas from feature dict without trained params.
+    3. Markov-aware mode: optionally incorporates Markov state features for in-play
+       prediction when use_markov_features=True and match_state is provided.
 
     The heuristic mode is the default for new teams or when no historical data
     is available. It produces reasonable predictions using the feature engineering
@@ -221,6 +240,14 @@ class DixonColesModel:
         self.min_lambda: float = self.dc_config.get('min_lambda', 0.05)
         self.max_lambda: float = self.dc_config.get('max_lambda', 5.0)
         self.max_goals: int = self.config.get('matrix', {}).get('max_goals', 8)
+        
+        # Markov features configuration
+        self.use_markov_features: bool = self.dc_config.get('use_markov_features', False)
+        self.markov_event_probs = None
+        self.markov_baselines = None
+        
+        # Match state for in-play prediction (set via set_match_state())
+        self.match_state: Optional[Dict[str, Any]] = None
 
         # Trained parameters (set after fit())
         self.teams_: Optional[list] = None
@@ -298,29 +325,95 @@ class DixonColesModel:
         self,
         home_features: Dict[str, Any],
         away_features: Dict[str, Any],
+        match_state: Optional[Dict[str, Any]] = None,
     ) -> Tuple[float, float]:
         """
         Estimate lambda_home and lambda_away for a match.
 
         If model is fitted and teams are known, uses trained DC parameters.
         Otherwise falls back to heuristic estimation from features.
+        
+        If Markov features are enabled (use_markov_features=True) and match_state
+        is provided, incorporates Markov-based intensity adjustments.
 
         Args:
             home_features: Feature dict for home team (from feature_pipeline).
             away_features: Feature dict for away team (from feature_pipeline).
+            match_state: Optional match state dict for in-play prediction.
+                Can also be set via set_match_state() method.
+                Expected keys: minute, score_diff, home_red_cards, away_red_cards.
 
         Returns:
             Tuple (lambda_home, lambda_away).
         """
+        # Use instance match_state if not provided
+        if match_state is None:
+            match_state = self.match_state
+        
         home_name = home_features.get('nombre', '')
         away_name = away_features.get('nombre', '')
 
         if (self.is_fitted_ and
                 home_name in (self.alpha_ or {}) and
                 away_name in (self.alpha_ or {})):
-            return self._predict_lambdas_trained(home_name, away_name, home_features, away_features)
+            return self._predict_lambdas_trained(home_name, away_name, home_features, away_features, match_state)
         else:
-            return self._predict_lambdas_heuristic(home_features, away_features)
+            return self._predict_lambdas_heuristic(home_features, away_features, match_state)
+    
+    def set_match_state(
+        self,
+        minute: int,
+        score_diff: int,
+        home_red_cards: int = 0,
+        away_red_cards: int = 0,
+        phase: str = "regular_time",
+    ) -> None:
+        """
+        Set the current match state for in-play prediction.
+        
+        This state is used by predict_lambdas() when Markov features are enabled.
+        
+        Args:
+            minute: Current match minute (0-90+).
+            score_diff: Home score minus away score.
+            home_red_cards: Home team red cards.
+            away_red_cards: Away team red cards.
+            phase: Match phase ("regular_time", etc.).
+        """
+        self.match_state = {
+            'minute': minute,
+            'score_diff': score_diff,
+            'home_red_cards': home_red_cards,
+            'away_red_cards': away_red_cards,
+            'phase': phase
+        }
+        logger.debug(f"Match state set: minute={minute}, score_diff={score_diff}")
+    
+    def load_markov_tables(
+        self,
+        event_probs_path: str,
+        baselines_path: str,
+    ) -> None:
+        """
+        Load Markov probability tables for Markov-aware mode.
+        
+        Call this before using Markov features to enable state-based adjustments.
+        
+        Args:
+            event_probs_path: Path to state_event_probabilities.csv
+            baselines_path: Path to baseline_probabilities.csv
+        """
+        if not _MARKOV_AVAILABLE:
+            logger.warning("Markov features module not available; cannot load tables")
+            return
+        
+        from ..features.markov_features import load_markov_tables as load_tables
+        
+        self.markov_event_probs, self.markov_baselines = load_tables(
+            event_probs_path, baselines_path
+        )
+        self.use_markov_features = True
+        logger.info(f"Markov tables loaded; Markov-aware mode enabled")
 
     def _predict_lambdas_trained(
         self,
@@ -328,6 +421,7 @@ class DixonColesModel:
         away_name: str,
         home_features: Dict[str, Any],
         away_features: Dict[str, Any],
+        match_state: Optional[Dict[str, Any]] = None,
     ) -> Tuple[float, float]:
         """Use trained DC parameters to estimate lambdas."""
         alpha_h = self.alpha_[home_name]
@@ -345,6 +439,12 @@ class DixonColesModel:
 
         lambda_h *= np.exp(ctx_h)
         lambda_a *= np.exp(ctx_a)
+        
+        # Apply Markov features adjustment if enabled and state is provided
+        if self.use_markov_features and match_state is not None and _MARKOV_AVAILABLE:
+            lambda_h, lambda_a = self._apply_markov_adjustment(
+                lambda_h, lambda_a, match_state
+            )
 
         lambda_h = float(np.clip(lambda_h, self.min_lambda, self.max_lambda))
         lambda_a = float(np.clip(lambda_a, self.min_lambda, self.max_lambda))
@@ -359,6 +459,7 @@ class DixonColesModel:
         self,
         home_features: Dict[str, Any],
         away_features: Dict[str, Any],
+        match_state: Optional[Dict[str, Any]] = None,
     ) -> Tuple[float, float]:
         """
         Heuristic lambda estimation from feature dicts.
@@ -406,6 +507,12 @@ class DixonColesModel:
             form_a * ranking_a * h2h_a * squad_a *
             np.exp(ctx_a)
         )
+        
+        # Apply Markov features adjustment if enabled and state is provided
+        if self.use_markov_features and match_state is not None and _MARKOV_AVAILABLE:
+            lambda_h, lambda_a = self._apply_markov_adjustment(
+                lambda_h, lambda_a, match_state
+            )
 
         lambda_h = float(np.clip(lambda_h, self.min_lambda, self.max_lambda))
         lambda_a = float(np.clip(lambda_a, self.min_lambda, self.max_lambda))
@@ -416,6 +523,91 @@ class DixonColesModel:
             f"(attack={attack_a:.3f}, def_h={defense_h:.3f})"
         )
         return lambda_h, lambda_a
+    
+    def _apply_markov_adjustment(
+        self,
+        lambda_h: float,
+        lambda_a: float,
+        match_state: Dict[str, Any],
+    ) -> Tuple[float, float]:
+        """
+        Apply Markov-based intensity adjustment to lambdas.
+        
+        Uses the current match state to adjust goal expectations based on
+        observed patterns in similar states (minute, score_diff, cards).
+        
+        Adjustment formula:
+            lambda_adj = lambda_base * (markov_p_goal / baseline_p_goal)
+        
+        Args:
+            lambda_h: Base home lambda.
+            lambda_a: Base away lambda.
+            match_state: Current match state dict.
+        
+        Returns:
+            Tuple (adjusted_lambda_h, adjusted_lambda_a)
+        """
+        if self.markov_event_probs is None or self.markov_baselines is None:
+            return lambda_h, lambda_a
+        
+        try:
+            from ..features.markov_features import (
+                build_state_from_match_context,
+                build_state_for_away_team,
+                get_markov_features,
+            )
+            
+            # Build state for home team perspective
+            home_state = build_state_from_match_context(
+                minute=match_state.get('minute', 0),
+                score_diff=match_state.get('score_diff', 0),
+                home_red_cards=match_state.get('home_red_cards', 0),
+                away_red_cards=match_state.get('away_red_cards', 0),
+                phase=match_state.get('phase', 'regular_time'),
+            )
+            
+            # Get Markov features for home team
+            home_markov = get_markov_features(
+                home_state, 
+                self.markov_event_probs, 
+                self.markov_baselines
+            )
+            
+            # Build state for away team perspective (inverted score_diff)
+            away_state = build_state_for_away_team(home_state)
+            
+            # Get Markov features for away team
+            away_markov = get_markov_features(
+                away_state,
+                self.markov_event_probs,
+                self.markov_baselines
+            )
+            
+            # Compute adjustment factors based on goal probability ratios
+            # If markov_p_goal > baseline, increase lambda; if lower, decrease
+            baseline_p_goal = self.markov_baselines['global'].get('p_goal', 0.17)
+            
+            home_ratio = home_markov['markov_p_goal_next_window'] / baseline_p_goal
+            away_ratio = away_markov['markov_p_goal_next_window'] / baseline_p_goal
+            
+            # Apply soft adjustment (dampen extreme ratios)
+            home_adjustment = 1.0 + 0.3 * (home_ratio - 1.0)  # 30% weight
+            away_adjustment = 1.0 + 0.3 * (away_ratio - 1.0)
+            
+            lambda_h_adj = lambda_h * home_adjustment
+            lambda_a_adj = lambda_a * away_adjustment
+            
+            logger.debug(
+                f"Markov adjustment: home_ratio={home_ratio:.3f}, away_ratio={away_ratio:.3f} -> "
+                f"lambda_h: {lambda_h:.4f} -> {lambda_h_adj:.4f}, "
+                f"lambda_a: {lambda_a:.4f} -> {lambda_a_adj:.4f}"
+            )
+            
+            return lambda_h_adj, lambda_a_adj
+            
+        except Exception as e:
+            logger.warning(f"Markov adjustment failed: {e}; using base lambdas")
+            return lambda_h, lambda_a
 
     def score_matrix(
         self,
