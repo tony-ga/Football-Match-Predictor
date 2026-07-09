@@ -43,7 +43,7 @@ Al ejecutar `python app.py` sin argumentos, verás el siguiente menú:
 
 Menú Principal
   1   📊 Generar predicciones desde fixture CSV
-  2   👥 Obtener datos de jugadores de una selección
+  2   👥 Player Statistics (estadísticas por jugador/partido)
   3   ⏱️  Obtener timelines de partidos pasados
   4   📅 Obtener fixtures de una fecha
   5   🔄 Correr pipeline diario completo
@@ -54,6 +54,8 @@ Menú Principal
   10  ⚙️  Configuración
   0   🚪 Salir
 ```
+
+**Nota:** La opción 2 (Player Statistics) ahora soporta nombres de equipos en español (ej. "Francia", "Marruecos") y reutiliza el script estable `match_player_defensive_stats` para evitar duplicados y fallos de búsqueda.
 
 ## 🛠️ Comandos CLI Disponibles
 
@@ -209,16 +211,34 @@ python app.py predict \
 # Desde menú interactivo:
 python app.py
 # → Seleccionar opción 2
-# → Elegir selección: Argentina (1)
+# → Elegir selección: Francia (28) - ahora soporta nombres en español
 # → Max partidos: 10
 # → Formato: table
 
 # Desde CLI:
 python app.py players \
-  --team Argentina \
+  --team France \
+  --max-matches 10 \
+  --format table
+
+# También acepta aliases en español:
+python app.py players \
+  --team Francia \
   --max-matches 10 \
   --format table
 ```
+
+**Nota sobre normalización de equipos:** El sistema ahora soporta nombres de equipos en español e inglés de forma intercambiable. Los siguientes aliases son equivalentes:
+- `Francia` = `France`
+- `Inglaterra` = `England`  
+- `España` = `Spain`
+- `Alemania` = `Germany`
+- `Marruecos` = `Morocco`
+- `Países Bajos` = `Netherlands`
+- `Corea del Sur` = `South Korea`
+- `Estados Unidos` = `United States` / `USA`
+
+La opción 2 (Player Statistics) reutiliza el script estable `match_player_defensive_stats` y resuelve automáticamente los nombres canónicos antes de buscar datos, evitando duplicados y fallos por idioma.
 
 ### Backtest y Calibración
 
@@ -246,11 +266,28 @@ Los comandos CLI reutilizan la lógica existente del proyecto:
 - `daily-report` → `predicciones.scripts.generate_daily_report`
 - `lambda-analysis` → `predicciones.scripts.analyze_lambda_distribution`
 - `backtest` → `predicciones.scripts.backtest_temporal_calibration_v2`
-- `players` → `predicciones.src.data.api.get_team_players_stats`
+- `players` → `predicciones.scripts.match_player_defensive_stats` (wrapper estable)
 - `timelines` → `predicciones.src.data.api.get_match_timeline`
 - `fixtures` → `predicciones.src.data.api.get_fixtures_by_date`
 
 Esto mantiene compatibilidad con análisis previos mientras proporciona una interfaz unificada.
+
+### Normalización de Equipos
+
+El sistema incluye un módulo de normalización (`team_normalization.py`) que mapea aliases en español e inglés a nombres canónicos internos:
+
+```python
+# Ejemplos de resolución automática
+"Francia" → "France"
+"England" → "England"  # ya canónico
+"Marruecos" → "Morocco"
+"España" → "Spain"
+```
+
+La opción 2 (Player Statistics) utiliza esta normalización antes de llamar al script `match_player_defensive_stats`, asegurando que:
+1. No hay duplicados en el menú (cada equipo aparece una sola vez)
+2. Los nombres en español se resuelven correctamente
+3. Las estadísticas retornadas son únicas por `(match_id, player_id)`
 
 ## 🛡️ Sanity Checks y Validaciones
 
@@ -307,3 +344,31 @@ O seleccionar "Modo detallado: yes" en el menú interactivo.
 ## 📞 Soporte
 
 Para issues o preguntas, revisar documentación en `output/reports/` o contactar al equipo de desarrollo.
+
+## 🔄 Cambios Recientes
+
+### Normalización de Equipos en Player Statistics (Opción 2)
+
+- **Problema:** La opción Player Statistics fallaba al buscar equipos con nombres en español seleccionados desde el menú (ej. "Francia", "Marruecos").
+- **Solución:** 
+  - Se implementó un módulo de normalización (`team_normalization.py`) que mapea aliases en español a nombres canónicos internos.
+  - El menú ahora muestra cada equipo una sola vez, con su nombre en español como display name.
+  - La selección del menú resuelve automáticamente al nombre canónico antes de llamar al script.
+  - Se reutiliza el script estable `match_player_defensive_stats` como backend, evitando reimplementaciones defectuosas.
+  
+- **Equipos soportados con aliases:**
+  - Francia ↔ France
+  - Inglaterra ↔ England
+  - España ↔ Spain
+  - Alemania ↔ Germany
+  - Marruecos ↔ Morocco
+  - Países Bajos ↔ Netherlands
+  - Corea del Sur ↔ South Korea
+  - Estados Unidos ↔ United States / USA
+  - Y más...
+
+- **Validación exitosa:**
+  - Francia: datos encontrados correctamente
+  - Marruecos: datos encontrados correctamente
+  - Argentina: sin registros duplicados
+  - Todos los equipos devuelven estadísticas únicas por `(match_id, player_id)`
