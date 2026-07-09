@@ -1,35 +1,4 @@
 ```
-# Data and output files
-predicciones/data/fixtures/*.csv
-predicciones/output/daily_predictions/*.csv
-
-# Dependencies
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Logs and temporary files
-*.log
-*.tmp
-*.swp
-
-# Editors
-.vscode/
-.idea/
-
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# Build and distribution
-dist/
-build/
-*.egg-info/
+# Output files
+predicciones/output/
 ```
