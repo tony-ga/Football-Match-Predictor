@@ -1,22 +1,17 @@
-```
-# Output directories and reports
-predicciones/output/
-
-# Python cache
-__pycache__/
+```gitignore
+# Compiled and build artifacts
 *.pyc
-*.pyo
-*.pyd
+__pycache__/
 
-# Logs
+# Dependencies
+venv/
+.venv/
+
+# Logs and temp files
 *.log
-
-# Temporary files
 *.tmp
-*.swp
-*.swo
 
-# Environment files
+# Environment
 .env
 .env.local
 *.env.*
@@ -26,11 +21,26 @@ coverage/
 htmlcov/
 .coverage
 
-# IDE files
+# Python cache
+.mypy_cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build directories
+build/
+dist/
+*.egg-info/
+
+# Editors
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# OS files
+# OS generated files
 .DS_Store
 Thumbs.db
 ```
