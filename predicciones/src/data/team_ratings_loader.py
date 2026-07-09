@@ -49,6 +49,14 @@ class TeamRatingsLoader:
             {"attack": 1.10, "defense": 1.00, "fifa_rank": 100}
         )
         
+        # Compute normalization factors to center ratings around 1.0
+        # This ensures lambda calculations are properly scaled for Poisson/DC model
+        self._attack_mean, self._defense_mean = self._compute_rating_means()
+        logger.info(
+            f"Rating normalization factors: attack_mean={self._attack_mean:.4f}, "
+            f"defense_mean={self._defense_mean:.4f}"
+        )
+        
         # Try to import team normalization for alias resolution
         self._normalizer = None
         try:
@@ -75,6 +83,24 @@ class TeamRatingsLoader:
         except (json.JSONDecodeError, IOError) as e:
             logger.error(f"Failed to load ratings: {e}")
             return {"teams": {}, "default": {"attack": 1.10, "defense": 1.00, "fifa_rank": 100}}
+    
+    def _compute_rating_means(self) -> Tuple[float, float]:
+        """
+        Compute mean attack and defense ratings across all teams.
+        
+        Returns:
+            Tuple of (mean_attack, mean_defense)
+        """
+        if not self.teams:
+            return 1.0, 1.0
+        
+        attacks = [r.get('attack', 1.0) for r in self.teams.values()]
+        defenses = [r.get('defense', 1.0) for r in self.teams.values()]
+        
+        mean_attack = sum(attacks) / len(attacks) if attacks else 1.0
+        mean_defense = sum(defenses) / len(defenses) if defenses else 1.0
+        
+        return mean_attack, mean_defense
     
     def normalize_team_name(self, team_name: str) -> str:
         """
@@ -165,16 +191,49 @@ class TeamRatingsLoader:
         rating, matched_name, used_fallback = self.get_team_rating(team_name, verbose)
         
         # Extract rating components
-        attack_rating = rating.get("attack", self.default["attack"])
-        defense_rating = rating.get("defense", self.default["defense"])
+        attack_rating_raw = rating.get("attack", self.default["attack"])
+        defense_rating_raw = rating.get("defense", self.default["defense"])
         fifa_rank = rating.get("fifa_rank", self.default.get("fifa_rank", 100))
         
-        # Compute ranking factor (consistent with src/features/ratings.py)
-        # Rank 1 → 1.35, Rank 50 → 1.05, Rank 100 → 0.75
-        reference_rank = 50.0
-        normalized = max(0, (reference_rank - fifa_rank) / reference_rank)
-        ranking_factor = 0.65 + 0.70 * normalized
-        ranking_factor = float(max(0.65, min(1.35, ranking_factor)))
+        # Normalize ratings to be centered around 1.0
+        # This is critical for proper Poisson/Dixon-Coles lambda scaling
+        # Raw ratings may have means != 1.0 (e.g., avg_attack=1.28, avg_defense=1.17)
+        # Normalized rating = raw_rating / mean_rating
+        # This ensures that average teams produce lambdas near LEAGUE_AVG_GOALS
+        if not used_fallback:
+            attack_rating = attack_rating_raw / self._attack_mean
+            defense_rating = defense_rating_raw / self._defense_mean
+        else:
+            # For fallback teams, also normalize the default rating
+            attack_rating = self.default["attack"] / self._attack_mean
+            defense_rating = self.default["defense"] / self._defense_mean
+        
+        # IMPORTANT: When using explicit attack/defense ratings from a file,
+        # we set ranking_factor, form_factor, h2h_factor, squad_multiplier to 1.0
+        # to avoid double-counting team strength. The ratings already encode
+        # the team's quality based on FIFA rank and performance.
+        # These factors are only meaningful when computing features from scratch
+        # without pre-computed ratings.
+        ranking_factor = 1.0
+        
+        if verbose:
+            logger.debug(
+                f"Rating normalization for {team_name}: "
+                f"attack {attack_rating_raw:.3f} -> {attack_rating:.3f}, "
+                f"defense {defense_rating_raw:.3f} -> {defense_rating:.3f}, "
+                f"ranking_factor set to 1.0 (avoid double-counting)"
+            )
+        
+        # IMPORTANT: When using explicit attack/defense ratings from a file,
+        # we set ranking_factor to 1.0 to avoid double-counting team strength.
+        # The ratings already encode the team's quality based on FIFA rank and performance.
+        # The old ranking_factor calculation is kept below for reference but overridden.
+        # OLD CODE (for reference only - DO NOT USE with pre-computed ratings):
+        #   reference_rank = 50.0
+        #   normalized = max(0, (reference_rank - fifa_rank) / reference_rank)
+        #   ranking_factor = 0.65 + 0.70 * normalized
+        #   ranking_factor = float(max(0.65, min(1.35, ranking_factor)))
+        ranking_factor = 1.0  # Overridden to prevent double-counting
         
         # Build feature dict (compatible with DixonColesModel.predict_lambdas)
         features = {
@@ -182,25 +241,32 @@ class TeamRatingsLoader:
             'attack_rating': float(attack_rating),
             'defense_rating': float(defense_rating),
             'form_factor': 1.0,  # Can be extended with form data
-            'ranking_factor': float(ranking_factor),
+            'ranking_factor': float(ranking_factor),  # Always 1.0 when using pre-computed ratings
             'h2h_factor': 1.0,   # Can be extended with H2H data
             'squad_multiplier': 1.0,  # Can be extended with squad data
             'home_advantage_log': home_advantage_log if is_home else 0.0,
             'context_modifier': 0.0,  # Can be extended with context data
         }
         
-        # Rating info for diagnostics
+        # Rating info for diagnostics (include both raw and normalized)
         rating_info = {
             'input_team_name': team_name,
             'matched_team_name': matched_name,
-            'home_attack_rating': attack_rating if is_home else None,
-            'home_defense_rating': defense_rating if is_home else None,
-            'away_attack_rating': attack_rating if not is_home else None,
-            'away_defense_rating': defense_rating if not is_home else None,
+            'home_attack_rating': float(attack_rating) if is_home else None,
+            'home_defense_rating': float(defense_rating) if is_home else None,
+            'away_attack_rating': float(attack_rating) if not is_home else None,
+            'away_defense_rating': float(defense_rating) if not is_home else None,
+            'home_attack_rating_raw': float(attack_rating_raw) if is_home else None,
+            'home_defense_rating_raw': float(defense_rating_raw) if is_home else None,
+            'away_attack_rating_raw': float(attack_rating_raw) if not is_home else None,
+            'away_defense_rating_raw': float(defense_rating_raw) if not is_home else None,
             'fifa_rank': fifa_rank,
             'ranking_factor': ranking_factor,
             'ratings_source': 'ratings_wc2026.json',
             'used_default_fallback': used_fallback,
+            'normalization_applied': True,
+            'attack_mean': self._attack_mean,
+            'defense_mean': self._defense_mean,
         }
         
         if verbose:
