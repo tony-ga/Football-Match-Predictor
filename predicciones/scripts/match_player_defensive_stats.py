@@ -31,32 +31,327 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from predicciones.src.data.espn_client_v2 import EspnClient
+from predicciones.src.utils.team_normalization import normalize_team_name, get_canonical_team_name
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# CLI Wrapper Functions - Stable API for CLI integration
+# Team Lookup with Normalization and Fallback
 # =============================================================================
+
+def _find_team_in_data(team_name: str) -> Optional[str]:
+    """
+    Find team in available data files using normalized name matching.
+    
+    Searches through:
+    - output/*.json files for match data
+    - data/examples/*.json
+    
+    Args:
+        team_name: Team name (may be in Spanish or English)
+        
+    Returns:
+        Canonical team name as found in data, or None if not found
+    """
+    # First normalize the input team name
+    normalized_input = normalize_team_name(team_name)
+    
+    # Also try direct match with ratings file which has Spanish names
+    ratings_paths = [
+        Path(__file__).parent.parent / "data" / "ratings_wc2026.json",
+        Path(__file__).parent.parent.parent / "data" / "ratings_wc2026.json",
+    ]
+    
+    for ratings_path in ratings_paths:
+        if ratings_path.exists():
+            try:
+                with open(ratings_path, 'r', encoding='utf-8') as f:
+                    ratings_data = json.load(f)
+                teams = ratings_data.get('teams', {})
+                # Check both normalized and original name
+                if normalized_input in teams:
+                    return normalized_input
+                if team_name in teams:
+                    return team_name
+                # Case-insensitive search
+                for team_key in teams.keys():
+                    if team_key.lower() == normalized_input.lower():
+                        return team_key
+                    if team_key.lower() == team_name.lower():
+                        return team_key
+            except Exception:
+                continue
+    
+    # Search in output JSON files
+    output_dirs = [
+        Path(__file__).parent.parent / "output",
+        Path(__file__).parent.parent.parent / "output",
+    ]
+    
+    for output_dir in output_dirs:
+        if not output_dir.exists():
+            continue
+        for json_file in output_dir.glob("*.json"):
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # Check match info
+                match_info = data.get('match', {})
+                home_team = match_info.get('home_team', '')
+                away_team = match_info.get('away_team', '')
+                
+                for candidate in [home_team, away_team]:
+                    if not candidate:
+                        continue
+                    # Direct match
+                    if candidate == normalized_input or candidate == team_name:
+                        return candidate
+                    # Case-insensitive match
+                    if candidate.lower() == normalized_input.lower():
+                        return candidate
+                    if candidate.lower() == team_name.lower():
+                        return candidate
+                
+                # Check teams array
+                teams_list = data.get('teams', [])
+                if isinstance(teams_list, list):
+                    for team_entry in teams_list:
+                        if isinstance(team_entry, dict):
+                            t_name = team_entry.get('team_name', '')
+                            if t_name == normalized_input or t_name == team_name:
+                                return t_name
+                            if t_name.lower() == normalized_input.lower():
+                                return t_name
+            except Exception:
+                continue
+    
+    return None
+
+
+def _get_team_matches(team_name: str, max_matches: int = 10) -> List[Dict[str, Any]]:
+    """
+    Get recent matches for a team from available data files.
+    
+    Args:
+        team_name: Canonical team name
+        max_matches: Maximum number of matches to return
+        
+    Returns:
+        List of match data dicts
+    """
+    matches = []
+    
+    output_dirs = [
+        Path(__file__).parent.parent / "output",
+        Path(__file__).parent.parent.parent / "output",
+    ]
+    
+    for output_dir in output_dirs:
+        if not output_dir.exists():
+            continue
+            
+        # Look for timeline and advanced stats files
+        patterns = ["*timeline*.json", "*stats*.json", "player_defensive*.json"]
+        
+        for pattern in patterns:
+            for json_file in output_dir.glob(pattern):
+                if len(matches) >= max_matches:
+                    break
+                    
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    match_info = data.get('match', {})
+                    home_team = match_info.get('home_team', '')
+                    away_team = match_info.get('away_team', '')
+                    
+                    # Check if this match involves our team
+                    if team_name not in [home_team, away_team]:
+                        continue
+                    
+                    # Extract player data if available
+                    if 'teams' in data and isinstance(data['teams'], list):
+                        matches.append({
+                            'file': str(json_file),
+                            'data': data,
+                            'home_team': home_team,
+                            'away_team': away_team,
+                        })
+                except Exception as e:
+                    logger.debug(f"Error reading {json_file}: {e}")
+                    continue
+    
+    return matches[:max_matches]
+
 
 def fetch_team_players(team: str, max_matches: int = 10) -> Optional[Dict[str, Any]]:
     """
-    Fetch player data for a team from ESPN API.
+    Fetch player data for a team from available sources.
     
-    This is a stable wrapper function for CLI integration.
+    This function implements a multi-tier lookup strategy:
+    1. Normalize team name using centralized team_normalization module
+    2. Search in local data files (output/*.json, data/examples/*.json)
+    3. Try ESPN API if connected and team found
+    4. Provide fallback with suggestions if team not found
     
     Args:
-        team: Team name
+        team: Team name (can be in Spanish or English, e.g., "Francia" or "France")
         max_matches: Maximum number of matches to consider
         
     Returns:
         Team data dict with players or None on error
     """
-    # Note: This is a placeholder - actual implementation would need
-    # ESPN API integration to fetch team roster and match data
-    logger.warning(f"fetch_team_players: Direct team lookup not yet implemented for '{team}'")
-    return None
+    # Step 1: Normalize the team name
+    canonical_name = normalize_team_name(team)
+    logger.info(f"Looking up team: '{team}' -> normalized: '{canonical_name}'")
+    
+    # Step 2: Find the actual team name in available data
+    actual_team_name = _find_team_in_data(team)
+    
+    if actual_team_name:
+        logger.info(f"Found team in data: '{actual_team_name}'")
+    else:
+        # Try with canonical name
+        actual_team_name = _find_team_in_data(canonical_name)
+        if actual_team_name:
+            logger.info(f"Found team using canonical name: '{actual_team_name}'")
+    
+    if not actual_team_name:
+        # Provide helpful suggestion
+        suggestions = _get_team_suggestions(team)
+        if suggestions:
+            logger.warning(f"Team '{team}' not found. Did you mean: {', '.join(suggestions[:3])}?")
+        else:
+            logger.warning(f"Team '{team}' not found in available data.")
+        return None
+    
+    # Step 3: Get matches for this team
+    matches = _get_team_matches(actual_team_name, max_matches)
+    
+    if not matches:
+        logger.warning(f"No match data found for team: {actual_team_name}")
+        return None
+    
+    # Step 4: Aggregate player data from all matches
+    all_goalkeepers = {}
+    all_outfield = {}
+    
+    for match in matches:
+        match_data = match['data']
+        teams_data = match_data.get('teams', [])
+        
+        for team_entry in teams_data:
+            if not isinstance(team_entry, dict):
+                continue
+            
+            t_name = team_entry.get('team_name', '')
+            if t_name != actual_team_name:
+                # Try normalized comparison
+                if normalize_team_name(t_name) != canonical_name:
+                    continue
+            
+            # Process goalkeepers
+            for gk in team_entry.get('goalkeepers', []):
+                player_id = gk.get('player_id', gk.get('player_name', ''))
+                if player_id:
+                    if player_id not in all_goalkeepers:
+                        all_goalkeepers[player_id] = {
+                            'player_name': gk.get('player_name', 'Unknown'),
+                            'player_id': player_id,
+                            'position': 'GK',
+                            'matches': 0,
+                            'saves': 0,
+                            'goals_conceded': 0,
+                        }
+                    all_goalkeepers[player_id]['matches'] += 1
+                    saves = gk.get('saves', 0) or 0
+                    gc = gk.get('goals_conceded', 0) or 0
+                    all_goalkeepers[player_id]['saves'] += saves
+                    all_goalkeepers[player_id]['goals_conceded'] += gc
+            
+            # Process outfield players
+            for of in team_entry.get('outfield', []):
+                player_id = of.get('player_id', of.get('player_name', ''))
+                if player_id:
+                    if player_id not in all_outfield:
+                        all_outfield[player_id] = {
+                            'player_name': of.get('player_name', 'Unknown'),
+                            'player_id': player_id,
+                            'position': of.get('position', 'N/A'),
+                            'matches': 0,
+                            'offsides': 0,
+                            'interceptions': 0,
+                            'clearances': 0,
+                            'goals': 0,
+                            'assists': 0,
+                            'tackles': 0,
+                        }
+                    all_outfield[player_id]['matches'] += 1
+                    
+                    # Accumulate stats (handle None values)
+                    of_stats = of.get('stats_raw', {})
+                    all_outfield[player_id]['offsides'] += (of.get('offsides') or 0)
+                    all_outfield[player_id]['interceptions'] += (of.get('interceptions') or 0)
+                    all_outfield[player_id]['clearances'] += (of.get('clearances') or 0)
+                    all_outfield[player_id]['goals'] += (of_stats.get('totalGoals') or 0)
+                    all_outfield[player_id]['assists'] += (of_stats.get('goalAssists') or 0)
+    
+    # Build result
+    result = {
+        'team_name': actual_team_name,
+        'canonical_name': canonical_name,
+        'matches_found': len(matches),
+        'goalkeepers': list(all_goalkeepers.values()),
+        'outfield': list(all_outfield.values()),
+    }
+    
+    logger.info(f"Successfully fetched data for {actual_team_name}: {len(all_goalkeepers)} GKs, {len(all_outfield)} outfield players")
+    return result
+
+
+def _get_team_suggestions(team_name: str) -> List[str]:
+    """
+    Get team name suggestions based on partial match.
+    
+    Args:
+        team_name: Team name that wasn't found
+        
+    Returns:
+        List of suggested team names
+    """
+    suggestions = []
+    normalized = normalize_team_name(team_name).lower()
+    
+    # Load from ratings
+    ratings_paths = [
+        Path(__file__).parent.parent / "data" / "ratings_wc2026.json",
+        Path(__file__).parent.parent.parent / "data" / "ratings_wc2026.json",
+    ]
+    
+    for ratings_path in ratings_paths:
+        if ratings_path.exists():
+            try:
+                with open(ratings_path, 'r', encoding='utf-8') as f:
+                    ratings_data = json.load(f)
+                teams = list(ratings_data.get('teams', {}).keys())
+                
+                # Find similar names
+                for team in teams:
+                    if normalized in team.lower() or team.lower() in normalized:
+                        suggestions.append(team)
+                    elif len(normalized) > 3 and normalized[:3] == team.lower()[:3]:
+                        suggestions.append(team)
+                
+                if suggestions:
+                    break
+            except Exception:
+                continue
+    
+    return list(set(suggestions))[:5]
 
 
 def compute_player_stats(team_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -73,24 +368,30 @@ def compute_player_stats(team_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         return []
     
     players = []
-    for team in team_data.get('teams', []):
-        for gk in team.get('goalkeepers', []):
-            players.append({
-                'name': gk.get('player_name', 'Unknown'),
-                'position': 'GK',
-                'matches': 1,
-                'saves': gk.get('saves'),
-                'goals_conceded': gk.get('goals_conceded'),
-            })
-        for of in team.get('outfield', []):
-            players.append({
-                'name': of.get('player_name', 'Unknown'),
-                'position': of.get('position', 'N/A'),
-                'matches': 1,
-                'offsides': of.get('offsides'),
-                'interceptions': of.get('interceptions'),
-                'clearances': of.get('clearances'),
-            })
+    
+    # Process goalkeepers - already aggregated in fetch_team_players
+    for gk in team_data.get('goalkeepers', []):
+        players.append({
+            'name': gk.get('player_name', 'Unknown'),
+            'position': 'GK',
+            'matches': gk.get('matches', 1),
+            'saves': gk.get('saves', 0),
+            'goals_conceded': gk.get('goals_conceded', 0),
+        })
+    
+    # Process outfield players - already aggregated in fetch_team_players
+    for of in team_data.get('outfield', []):
+        players.append({
+            'name': of.get('player_name', 'Unknown'),
+            'position': of.get('position', 'N/A'),
+            'matches': of.get('matches', 1),
+            'offsides': of.get('offsides', 0),
+            'interceptions': of.get('interceptions', 0),
+            'clearances': of.get('clearances', 0),
+            'goals': of.get('goals', 0),
+            'assists': of.get('assists', 0),
+            'tackles': of.get('tackles', 0),
+        })
     
     return players
 
