@@ -1,46 +1,67 @@
-```gitignore
+```
 # Compiled and build artifacts
 *.pyc
 __pycache__/
+*.o
+*.obj
 
 # Dependencies
-venv/
 .venv/
+venv/
 
 # Logs and temp files
 *.log
 *.tmp
+*.swp
 
 # Environment
 .env
 .env.local
 *.env.*
 
-# Coverage reports
-coverage/
-htmlcov/
-.coverage
-
-# Python cache
-.mypy_cache/
-.pytest_cache/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Build directories
-build/
-dist/
-*.egg-info/
-
 # Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# OS generated files
-.DS_Store
-Thumbs.db
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Python specific
+*.pyc
+__pycache__/
+.Python
+*.so
+.Python
+*.pyo
+*.pyd
+*$py.class
+*$py.o
+*$py.d
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.installed.cfg
+*.egg-link
+*.egg
+*.egg~
+.egg-info/
+.eggs/
+parts/
+develop-eggs/
+downloads/
+src/
+var/
+wheels/
+*.whl
+*.dist-info/
 ```
