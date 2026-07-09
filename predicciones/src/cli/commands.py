@@ -814,48 +814,131 @@ def players_command(
     team: str,
     max_matches: int = 10,
     output_format: str = "table",
-    mode: str = "roster",  # "roster" for accumulated, "match" for per-match
+    mode: str = "summary",  # "summary", "cards", "timeline"
 ) -> None:
     """
-    Get player statistics for a selected team.
+    Get player statistics for a selected team with multiple submodes.
     
     Uses the espn_player_stats module which reads from JSONL derived data.
     Normalizes team name to handle Spanish/English aliases.
     
+    Submodes:
+    - summary: Accumulated stats (GP, Min, Gls, Ast, YC, RC, Shots)
+    - cards: Historical cards per player  
+    - timeline: Chronological card timeline by match
+    
     Args:
         team: Team name (Spanish or English accepted)
-        max_matches: Maximum matches to consider (for match mode)
+        max_matches: Maximum matches to consider
         output_format: Output format ("table", "csv", "json")
-        mode: "roster" for accumulated stats, "match" for per-match stats
+        mode: One of "summary", "cards", "timeline"
     """
     # Normalize team name for display
     from predicciones.src.utils.team_normalization import normalize_team_name
     canonical_team = normalize_team_name(team)
     
-    console.print(f"[bold blue]Fetching player stats for: {team}[/bold blue]")
-    console.print(f"[dim]Normalized team name: {canonical_team}[/dim]")
+    console.print(f"[bold blue]Player Statistics - {canonical_team}[/bold blue]")
+    console.print(f"[dim]Mode: {mode} | Max matches: {max_matches}[/dim]")
     
     try:
         from predicciones.scripts.espn_player_stats import (
+            fetch_extended_player_stats,
             fetch_team_roster_stats,
-            fetch_team_player_match_stats,
             format_output_table,
             format_output_csv,
             format_output_json,
+            format_card_timeline_table,
+            format_card_timeline_csv,
         )
         
         # Fetch data based on mode
-        if mode == "roster":
+        if mode == "summary":
             console.print("[dim]Fetching accumulated roster stats...[/dim]")
-            player_stats = fetch_team_roster_stats(canonical_team)
+            player_stats = fetch_extended_player_stats(canonical_team, mode="summary")
             display_mode = "roster"
+            
+            # Show matches used info
+            if player_stats:
+                from pathlib import Path
+                import json
+                match_events_path = Path("/workspace/data/derived/match_events.jsonl")
+                player_stats_path = Path("/workspace/data/derived/player_match_stats.jsonl")
+                
+                # Get unique matches for this team from player_match_stats.jsonl
+                matches_used = []
+                competitions = set()
+                if player_stats_path.exists():
+                    with open(player_stats_path, 'r', encoding='utf-8') as f:
+                        seen_events = set()
+                        for line in f:
+                            record = json.loads(line)
+                            if record.get("team", "").lower() == canonical_team.lower():
+                                eid = record.get("event_id")
+                                if eid and eid not in seen_events:
+                                    seen_events.add(eid)
+                                    matches_used.append({
+                                        "event_id": eid,
+                                        "date": record.get("date", ""),
+                                    })
+                
+                # Try to enrich with competition info from match_events.jsonl
+                if match_events_path.exists():
+                    event_info = {}
+                    with open(match_events_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            record = json.loads(line)
+                            eid = record.get("event_id")
+                            event_info[eid] = {
+                                "competition": record.get("competition", ""),
+                                "home_team": record.get("home_team", ""),
+                                "away_team": record.get("away_team", ""),
+                            }
+                    
+                    # Update matches with competition info
+                    for m in matches_used:
+                        eid = m["event_id"]
+                        if eid in event_info:
+                            info = event_info[eid]
+                            m["competition"] = info["competition"]
+                            m["home_team"] = info["home_team"]
+                            m["away_team"] = info["away_team"]
+                            competitions.add(info["competition"])
+                
+                # Display matches used
+                if matches_used:
+                    console.print("\n[bold]Matches used:[/bold]")
+                    for m in sorted(matches_used, key=lambda x: x.get("date", "")):
+                        comp = m.get("competition", "Unknown")
+                        home = m.get("home_team", "")
+                        away = m.get("away_team", "")
+                        date_str = (m.get("date", "") or "")[:10]
+                        if home and away:
+                            if home.lower() == canonical_team.lower():
+                                opponent = away
+                            else:
+                                opponent = home
+                            console.print(f"  [dim]{date_str} | {comp} | {canonical_team} vs {opponent}[/dim]")
+                        else:
+                            console.print(f"  [dim]{date_str} | {comp} | Event {m.get('event_id')}[/dim]")
+                    
+                    if competitions:
+                        console.print(f"\n[bold]Competitions included:[/bold] {', '.join(sorted(competitions))}")
+                    
+        elif mode == "cards":
+            console.print("[dim]Fetching card history per player...[/dim]")
+            player_stats = fetch_extended_player_stats(canonical_team, mode="cards", max_matches=max_matches)
+            display_mode = "cards"
+        elif mode == "timeline":
+            console.print(f"[dim]Fetching chronological card timeline (max {max_matches} matches)...[/dim]")
+            player_stats = fetch_extended_player_stats(canonical_team, mode="timeline", max_matches=max_matches)
+            display_mode = "timeline"
         else:
-            console.print(f"[dim]Fetching match stats (max {max_matches} matches)...[/dim]")
-            player_stats = fetch_team_player_match_stats(canonical_team, max_matches=max_matches)
-            display_mode = "match"
+            console.print(f"[yellow]Unknown mode: {mode}. Using 'summary'.[/yellow]")
+            player_stats = fetch_extended_player_stats(canonical_team, mode="summary")
+            display_mode = "roster"
         
         if not player_stats:
-            console.print(f"[yellow]No data found for team: {team}[/yellow]")
+            console.print(f"[yellow]No data found for team: {team} (mode: {mode})[/yellow]")
             return
         
         # Log stats summary
@@ -863,15 +946,21 @@ def players_command(
         
         # Display based on format
         if output_format == "table":
-            table_str = format_output_table(player_stats, mode=display_mode)
+            if display_mode == "timeline":
+                table_str = format_card_timeline_table(player_stats)
+            else:
+                table_str = format_output_table(player_stats, mode=display_mode)
             console.print(table_str)
         elif output_format == "csv":
-            csv_str = format_output_csv(player_stats, mode=display_mode)
+            if display_mode == "timeline":
+                csv_str = format_card_timeline_csv(player_stats)
+            else:
+                csv_str = format_output_csv(player_stats, mode=display_mode)
             # Save CSV to file
             from pathlib import Path
             output_dir = Path("output/player_stats")
             output_dir.mkdir(parents=True, exist_ok=True)
-            filename = f"{canonical_team.replace(' ', '_')}_players_{mode}.csv"
+            filename = f"{canonical_team.replace(' ', '_')}_{mode}_{max_matches}.csv"
             output_path = output_dir / filename
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(csv_str)
