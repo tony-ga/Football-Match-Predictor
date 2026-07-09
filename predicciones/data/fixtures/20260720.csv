@@ -1,0 +1,3 @@
+match_id,home_team,away_team,competition,date,kickoff_datetime,neutral_venue
+local_001,Argentina,Brasil,FIFA World Cup,2026-07-20,2026-07-20 20:00,True
+local_002,France,England,FIFA World Cup,2026-07-20,2026-07-20 16:00,True

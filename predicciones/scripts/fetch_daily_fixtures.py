@@ -3,6 +3,10 @@
 Fetch Daily Fixtures Script
 
 Obtains real fixtures for a given date from available data sources.
+Uses cascading fallback strategy:
+1. Primary APIs (football-data.org, API-Football)
+2. ESPN fallback (no API key required)
+3. Local existing fixture files
 
 Usage:
     python scripts/fetch_daily_fixtures.py --date 2025-07-15
@@ -18,7 +22,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import pandas as pd
 
@@ -26,7 +30,7 @@ import pandas as pd
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from predicciones.src.data.api_client import FootballAPIClient
+from predicciones.src.data.fixture_resolver import FixtureResolver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,232 +69,33 @@ def parse_date(date_str: str) -> str:
     raise ValueError(f"Unrecognized date format: {date_str}. Use YYYYMMDD or YYYY-MM-DD")
 
 
-def fetch_fixtures_for_date(date_str: str, api_client: Optional[FootballAPIClient] = None) -> pd.DataFrame:
+def fetch_fixtures_for_date(date_str: str, leagues: Optional[List[str]] = None) -> pd.DataFrame:
     """
-    Fetch fixtures for a specific date from available API sources.
+    Fetch fixtures for a specific date using cascading fallback strategy.
     
     Args:
         date_str: Date in YYYY-MM-DD or YYYYMMDD format.
-        api_client: Optional FootballAPIClient instance. If None, creates new one.
-    
+        leagues: Optional list of ESPN league slugs to try.
+        
     Returns:
-        DataFrame with columns: date, league, home_team, away_team, kickoff_datetime
+        DataFrame with columns: match_id, home_team, away_team, competition, 
+                               date, kickoff_datetime, neutral_venue
         Empty DataFrame with valid columns if no fixtures found.
     """
     # Normalize date
     normalized_date = parse_date(date_str)
     logger.info(f"Fetching fixtures for date: {normalized_date}")
     
-    # Initialize API client if not provided
-    if api_client is None:
-        api_client = FootballAPIClient()
+    # Use the new fixture resolver with cascading fallback
+    resolver = FixtureResolver()
+    df, source = resolver.resolve_fixtures_for_date(normalized_date, leagues)
     
-    fixtures = []
-    
-    # Strategy 1: Try football-data.org daily matches endpoint
-    try:
-        fixtures_from_api = _fetch_from_football_data(api_client, normalized_date)
-        if fixtures_from_api:
-            fixtures.extend(fixtures_from_api)
-            logger.info(f"Fetched {len(fixtures_from_api)} fixtures from football-data.org")
-    except Exception as e:
-        logger.warning(f"football-data.org failed: {e}")
-    
-    # Strategy 2: Try API-Football fixtures by date
-    try:
-        fixtures_from_api = _fetch_from_api_football(api_client, normalized_date)
-        if fixtures_from_api:
-            fixtures.extend(fixtures_from_api)
-            logger.info(f"Fetched {len(fixtures_from_api)} fixtures from API-Football")
-    except Exception as e:
-        logger.warning(f"API-Football failed: {e}")
-    
-    # Strategy 3: Check for existing local fixture file as fallback
-    if not fixtures:
-        try:
-            fixtures_from_file = _load_existing_fixture(date_str)
-            if fixtures_from_file:
-                fixtures.extend(fixtures_from_file)
-                logger.info(f"Loaded {len(fixtures_from_file)} fixtures from existing local file")
-        except Exception as e:
-            logger.debug(f"No existing fixture file found: {e}")
-    
-    # Strategy 4: Try open football sources for major leagues
-    if not fixtures:
-        try:
-            fixtures_from_api = _fetch_from_open_sources(normalized_date)
-            if fixtures_from_api:
-                fixtures.extend(fixtures_from_api)
-                logger.info(f"Fetched {len(fixtures_from_api)} fixtures from open sources")
-        except Exception as e:
-            logger.warning(f"Open sources failed: {e}")
-    
-    # Create DataFrame
-    if fixtures:
-        df = pd.DataFrame(fixtures)
-        # Ensure column order
-        required_cols = ['date', 'league', 'home_team', 'away_team', 'kickoff_datetime']
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = None
-        df = df[required_cols]
-        logger.info(f"Total fixtures fetched: {len(df)}")
-        return df
+    if len(df) > 0:
+        logger.info(f"Fixtures obtained from source: {source}")
     else:
-        # Return empty DataFrame with valid columns
-        logger.warning(f"No fixtures found for date {normalized_date}")
-        return pd.DataFrame(columns=['date', 'league', 'home_team', 'away_team', 'kickoff_datetime'])
-
-
-def _load_existing_fixture(date_str: str) -> List[Dict[str, Any]]:
-    """
-    Load existing fixture file for the given date if it exists and has matches.
+        logger.warning(f"No fixtures found for date {normalized_date} from any source")
     
-    Returns list of fixture dicts or empty list if file doesn't exist or is empty.
-    """
-    from pathlib import Path
-    
-    # Normalize date for filename
-    try:
-        normalized = parse_date(date_str)
-        date_obj = datetime.strptime(normalized, "%Y-%m-%d")
-        filename_date = date_obj.strftime("%Y%m%d")
-    except ValueError:
-        return []
-    
-    # Check both possible locations
-    fixture_paths = [
-        project_root / "data" / "fixtures" / f"{filename_date}.csv",
-        project_root / "predicciones" / "data" / "fixtures" / f"{filename_date}.csv",
-    ]
-    
-    for fixture_path in fixture_paths:
-        if fixture_path.exists():
-            try:
-                df = pd.read_csv(fixture_path)
-                if len(df) > 0:
-                    fixtures = []
-                    for _, row in df.iterrows():
-                        fixtures.append({
-                            'date': row.get('date', normalized),
-                            'league': row.get('league', 'Unknown'),
-                            'home_team': row.get('home_team', ''),
-                            'away_team': row.get('away_team', ''),
-                            'kickoff_datetime': row.get('kickoff_datetime', ''),
-                        })
-                    return fixtures
-            except Exception:
-                continue
-    
-    return []
-
-
-def _fetch_from_football_data(api_client: FootballAPIClient, date_str: str) -> List[Dict[str, Any]]:
-    """
-    Fetch fixtures from football-data.org for a specific date.
-    
-    Uses the /matches endpoint with date range filtering.
-    """
-    fixtures = []
-    
-    if not api_client.football_data_token:
-        logger.debug("No FOOTBALL_DATA_TOKEN available, skipping football-data.org")
-        return []
-    
-    headers = {"X-Auth-Token": api_client.football_data_token}
-    
-    # football-data.org allows filtering by date range
-    # We'll query matches for the specific date
-    url = "https://api.football-data.org/v4/matches"
-    params = {
-        "dateFrom": date_str,
-        "dateTo": date_str,
-        "limit": 100
-    }
-    
-    response = api_client._make_request(url, headers, params)
-    matches = response.get("matches", [])
-    
-    for match in matches:
-        status = match.get("status", "")
-        # Include scheduled and finished matches
-        if status in ["SCHEDULED", "FINISHED", "IN_PLAY", "PAUSED"]:
-            home_team = match.get("homeTeam", {}).get("name")
-            away_team = match.get("awayTeam", {}).get("name")
-            competition = match.get("competition", {}).get("name", "Unknown")
-            utc_date = match.get("utcDate")
-            
-            if home_team and away_team and utc_date:
-                # Extract kickoff time from utcDate
-                try:
-                    kickoff_dt = datetime.fromisoformat(utc_date.replace("Z", "+00:00"))
-                    kickoff_str = kickoff_dt.strftime("%Y-%m-%d %H:%M")
-                except:
-                    kickoff_str = utc_date
-                
-                fixtures.append({
-                    "date": date_str,
-                    "league": competition,
-                    "home_team": home_team,
-                    "away_team": away_team,
-                    "kickoff_datetime": kickoff_str
-                })
-    
-    return fixtures
-
-
-def _fetch_from_api_football(api_client: FootballAPIClient, date_str: str) -> List[Dict[str, Any]]:
-    """
-    Fetch fixtures from API-Football for a specific date.
-    """
-    fixtures = []
-    
-    if not api_client.api_football_key:
-        logger.debug("No API_FOOTBALL_KEY available, skipping API-Football")
-        return []
-    
-    headers = {"x-apisports-key": api_client.api_football_key}
-    url = "https://v3.football.api-sports.io/fixtures"
-    params = {"date": date_str}
-    
-    response = api_client._make_request(url, headers, params)
-    fixture_list = response.get("response", [])
-    
-    for fixture in fixture_list:
-        home_team = fixture.get("teams", {}).get("home", {}).get("name")
-        away_team = fixture.get("teams", {}).get("away", {}).get("name")
-        league = fixture.get("league", {}).get("name", "Unknown")
-        fixture_date = fixture.get("fixture", {}).get("date")
-        
-        if home_team and away_team and fixture_date:
-            # Extract kickoff time
-            try:
-                kickoff_dt = datetime.fromisoformat(fixture_date.replace("Z", "+00:00"))
-                kickoff_str = kickoff_dt.strftime("%Y-%m-%d %H:%M")
-            except:
-                kickoff_str = fixture_date
-            
-            fixtures.append({
-                "date": date_str,
-                "league": league,
-                "home_team": home_team,
-                "away_team": away_team,
-                "kickoff_datetime": kickoff_str
-            })
-    
-    return fixtures
-
-
-def _fetch_from_open_sources(date_str: str) -> List[Dict[str, Any]]:
-    """
-    Fetch fixtures from open/static sources as fallback.
-    
-    This uses known league schedules and can be extended with more sources.
-    For now, returns empty list as we prefer live API data.
-    """
-    # In production, this could query additional open sources
-    # For now, we rely on the API clients above
-    return []
+    return df
 
 
 def save_fixtures(df: pd.DataFrame, date_str: str, output_dir: Optional[Path] = None) -> Path:
@@ -365,8 +170,10 @@ def main():
         print(f"\n✓ Fetched {len(df)} fixtures for {args.date}")
         print(f"   Saved to: {output_path}")
         print(f"\nLeagues included:")
-        for league in df['league'].unique():
-            count = len(df[df['league'] == league])
+        # Use 'competition' column instead of 'league'
+        col_name = 'competition' if 'competition' in df.columns else 'league'
+        for league in df[col_name].unique():
+            count = len(df[df[col_name] == league])
             print(f"   - {league}: {count} match(es)")
 
 

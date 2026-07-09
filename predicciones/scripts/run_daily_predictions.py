@@ -283,10 +283,19 @@ class DailyPredictionRunner:
         df = pd.read_csv(fixture_path)
         
         # Validate required columns
-        required_cols = ['date', 'league', 'home_team', 'away_team']
+        # Support both 'league' and 'competition' column names
+        required_cols = ['date', 'home_team', 'away_team']
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             raise ValueError(f"Missing required columns: {missing_cols}")
+        
+        # Check for league/competition column
+        if 'league' not in df.columns and 'competition' not in df.columns:
+            raise ValueError("Missing required column: 'league' or 'competition'")
+        
+        # Normalize column name to 'league' for downstream processing
+        if 'competition' in df.columns and 'league' not in df.columns:
+            df = df.rename(columns={'competition': 'league'})
         
         # Log ratings summary at start
         if self.verbose:
