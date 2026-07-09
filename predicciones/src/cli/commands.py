@@ -3,23 +3,364 @@ CLI Commands for Football Prediction System
 
 This module implements all command functions used by app.py.
 Each function wraps existing project functionality.
+Includes helper functions for discovering available data.
 """
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
+import json
+import csv
 
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
+from rich.prompt import Prompt, IntPrompt, Confirm
 
 console = Console()
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
+
+
+# =============================================================================
+# Helper Functions for Data Discovery
+# =============================================================================
+
+def list_available_fixtures() -> List[Dict[str, Any]]:
+    """List available fixture files in data/fixtures directories."""
+    fixtures = []
+    
+    # Check both possible locations
+    fixture_dirs = [
+        project_root / "data" / "fixtures",
+        project_root / "predicciones" / "data" / "fixtures",
+    ]
+    
+    for fixture_dir in fixture_dirs:
+        if fixture_dir.exists():
+            for file in sorted(fixture_dir.glob("*.csv")):
+                try:
+                    # Read first line to get date from filename or content
+                    date_str = file.stem  # e.g., "20250715"
+                    
+                    # Count matches in file
+                    with open(file, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        match_count = sum(1 for _ in reader)
+                    
+                    fixtures.append({
+                        "path": str(file.relative_to(project_root)),
+                        "date": date_str,
+                        "matches": match_count,
+                        "size_kb": round(file.stat().st_size / 1024, 1),
+                    })
+                except Exception:
+                    continue
+    
+    return fixtures
+
+
+def list_available_timelines() -> List[Dict[str, Any]]:
+    """List available timeline data from output files."""
+    timelines = []
+    
+    output_dirs = [
+        project_root / "output",
+        project_root / "predicciones" / "output",
+    ]
+    
+    for output_dir in output_dirs:
+        if output_dir.exists():
+            # Look for timeline JSON files
+            for file in sorted(output_dir.glob("*timeline*.json")):
+                try:
+                    with open(file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    match_info = data.get('match', {})
+                    sources = data.get('sources', {})
+                    
+                    timelines.append({
+                        "match_id": data.get('event_id', file.stem.split('_')[-1] if '_' in file.stem else 'unknown'),
+                        "fixture": f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}",
+                        "date": match_info.get('date', 'N/A') or 'N/A',
+                        "competition": data.get('league', 'N/A'),
+                        "events": sources.get('total_events', len(data.get('events', []))),
+                        "status": match_info.get('status', 'N/A'),
+                        "path": str(file.relative_to(project_root)),
+                    })
+                except Exception:
+                    continue
+            
+            # Also check for any match JSON files that might contain timeline data
+            for file in sorted(output_dir.glob("*.json")):
+                if "timeline" in file.name.lower():
+                    continue  # Already processed
+                try:
+                    with open(file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    if 'events' in data or 'match' in data:
+                        match_info = data.get('match', {})
+                        timelines.append({
+                            "match_id": data.get('event_id', file.stem.split('_')[-1] if '_' in file.stem else 'unknown'),
+                            "fixture": f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}",
+                            "date": match_info.get('date', 'N/A') or 'N/A',
+                            "competition": data.get('league', 'N/A'),
+                            "events": len(data.get('events', [])),
+                            "status": match_info.get('status', 'N/A'),
+                            "path": str(file.relative_to(project_root)),
+                        })
+                except Exception:
+                    continue
+    
+    # Remove duplicates by match_id
+    seen = set()
+    unique_timelines = []
+    for t in timelines:
+        if t["match_id"] not in seen:
+            seen.add(t["match_id"])
+            unique_timelines.append(t)
+    
+    return unique_timelines
+
+
+def list_available_teams() -> List[str]:
+    """Extract unique team names from available fixtures and predictions."""
+    teams = set()
+    
+    # From fixtures
+    fixture_dirs = [
+        project_root / "data" / "fixtures",
+        project_root / "predicciones" / "data" / "fixtures",
+    ]
+    
+    for fixture_dir in fixture_dirs:
+        if fixture_dir.exists():
+            for file in fixture_dir.glob("*.csv"):
+                try:
+                    with open(file, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            if 'home_team' in row:
+                                teams.add(row['home_team'])
+                            if 'away_team' in row:
+                                teams.add(row['away_team'])
+                except Exception:
+                    continue
+    
+    # From predictions
+    pred_dirs = [
+        project_root / "output" / "daily_predictions",
+        project_root / "predicciones" / "output" / "daily_predictions",
+    ]
+    
+    for pred_dir in pred_dirs:
+        if pred_dir.exists():
+            for file in pred_dir.glob("*.csv"):
+                try:
+                    with open(file, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            if 'home_team' in row:
+                                teams.add(row['home_team'])
+                            if 'away_team' in row:
+                                teams.add(row['away_team'])
+                except Exception:
+                    continue
+    
+    return sorted(list(teams))
+
+
+def list_available_reports() -> List[Dict[str, Any]]:
+    """List available daily reports."""
+    reports = []
+    
+    report_dirs = [
+        project_root / "output" / "daily_reports",
+        project_root / "predicciones" / "output" / "daily_reports",
+    ]
+    
+    for report_dir in report_dirs:
+        if report_dir.exists():
+            for file in sorted(report_dir.glob("*.md")):
+                try:
+                    date_str = file.stem.split('_')[0]  # e.g., "20250715"
+                    reports.append({
+                        "date": date_str,
+                        "type": "report",
+                        "path": str(file.relative_to(project_root)),
+                        "size_kb": round(file.stat().st_size / 1024, 1),
+                    })
+                except Exception:
+                    continue
+    
+    return reports
+
+
+def list_available_predictions() -> List[Dict[str, Any]]:
+    """List available prediction files."""
+    predictions = []
+    
+    pred_dirs = [
+        project_root / "output" / "daily_predictions",
+        project_root / "predicciones" / "output" / "daily_predictions",
+    ]
+    
+    for pred_dir in pred_dirs:
+        if pred_dir.exists():
+            for file in sorted(pred_dir.glob("*.csv")):
+                try:
+                    date_str = file.stem.split('_')[0]
+                    predictions.append({
+                        "date": date_str,
+                        "type": "predictions",
+                        "path": str(file.relative_to(project_root)),
+                        "size_kb": round(file.stat().st_size / 1024, 1),
+                    })
+                except Exception:
+                    continue
+    
+    return predictions
+
+
+def list_recent_outputs(limit: int = 10) -> List[Dict[str, Any]]:
+    """List recent output files across all output directories."""
+    outputs = []
+    
+    output_dirs = [
+        project_root / "output",
+        project_root / "predicciones" / "output",
+    ]
+    
+    for output_dir in output_dirs:
+        if output_dir.exists():
+            for file in output_dir.rglob("*"):
+                if file.is_file() and file.suffix in ['.csv', '.json', '.md']:
+                    try:
+                        stat = file.stat()
+                        outputs.append({
+                            "name": file.name,
+                            "type": file.suffix[1:].upper() if file.suffix else "file",
+                            "date": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                            "size_kb": round(stat.st_size / 1024, 1),
+                            "path": str(file.relative_to(project_root)),
+                        })
+                    except Exception:
+                        continue
+    
+    # Sort by modification time (newest first)
+    outputs.sort(key=lambda x: x["date"], reverse=True)
+    
+    return outputs[:limit]
+
+
+def get_config_sections() -> List[str]:
+    """Get available configuration sections from config file."""
+    from predicciones.src.utils.config_loader import config
+    
+    if not config:
+        return []
+    
+    return sorted([k for k in config.keys() if isinstance(config[k], dict)])
+
+
+def choose_from_table(
+    console: Console,
+    items: List[Dict[str, Any]],
+    title: str,
+    columns: List[str],
+    column_map: Dict[str, str],
+    allow_manual: bool = True,
+    manual_prompt: str = "Enter index or manual value"
+) -> Optional[Any]:
+    """Display items in a table and let user choose by index."""
+    if not items:
+        if allow_manual:
+            return None
+        return None
+    
+    table = Table(title=title, show_header=True, header_style="bold magenta")
+    table.add_column("#", justify="right", style="cyan")
+    for col in columns:
+        table.add_column(column_map.get(col, col), style="white")
+    
+    for idx, item in enumerate(items, 1):
+        row_data = [str(idx)]
+        for col in columns:
+            row_data.append(str(item.get(col, 'N/A')))
+        table.add_row(*row_data)
+    
+    console.print(table)
+    
+    if allow_manual and len(items) > 0:
+        choice = Prompt.ask(
+            f"\n[cyan]{manual_prompt} (1-{len(items)}, or type value)[/cyan]"
+        )
+        
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(items):
+                return items[idx]
+        except ValueError:
+            # User entered a manual value
+            return choice
+        
+        return None
+    elif len(items) > 0:
+        choice = IntPrompt.ask(
+            f"\n[cyan]Select option (1-{len(items)})[/cyan]",
+            default=1
+        )
+        idx = choice - 1
+        if 0 <= idx < len(items):
+            return items[idx]
+        return None
+    
+    return None
+
+
+def choose_from_list(
+    console: Console,
+    items: List[Any],
+    title: str,
+    allow_manual: bool = True,
+    allow_multiple: bool = False
+) -> Optional[Any]:
+    """Display items as a numbered list and let user choose."""
+    if not items:
+        return None
+    
+    console.print(f"\n[bold]{title}[/bold]")
+    for idx, item in enumerate(items, 1):
+        console.print(f"  [cyan]{idx}.[/cyan] {item}")
+    
+    if allow_manual:
+        choice = Prompt.ask(
+            f"\n[cyan]Select (1-{len(items)}) or type custom value[/cyan]"
+        )
+        
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(items):
+                return items[idx]
+        except ValueError:
+            return choice
+        
+        return None
+    else:
+        choice = IntPrompt.ask(
+            f"\n[cyan]Select option (1-{len(items)})[/cyan]",
+            default=1
+        )
+        idx = choice - 1
+        if 0 <= idx < len(items):
+            return items[idx]
+        return None
 
 
 def predict_command(
