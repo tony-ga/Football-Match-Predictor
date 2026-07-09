@@ -861,7 +861,16 @@ def players_command(
             if player_stats:
                 from pathlib import Path
                 import json
-                player_stats_path = Path("/workspace/data/derived/player_match_stats.jsonl")
+                
+                # Resolve path relative to project root (workspace)
+                # Strategy: go up from commands.py to find data/derived
+                current_file = Path(__file__).resolve()
+                # Navigate: /workspace/predicciones/src/cli/commands.py -> /workspace
+                project_root = current_file.parent.parent.parent.parent
+                player_stats_path = project_root / "data" / "derived" / "player_match_stats.jsonl"
+                
+                # Debug info
+                console.print(f"[dim]Player stats path: {player_stats_path} (exists={player_stats_path.exists()})[/dim]")
                 
                 # Get unique matches for this team from player_match_stats.jsonl
                 matches_used = []
