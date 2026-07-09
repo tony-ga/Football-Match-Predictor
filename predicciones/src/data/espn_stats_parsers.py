@@ -598,9 +598,23 @@ def _parse_roster_player_entry(
     player_block: dict,
     home_away: str,
     team_id: str,
-    team_name: str
+    team_name: str,
+    substitutions: Optional[Dict[str, Dict[str, Any]]] = None,
+    match_duration: int = 90
 ) -> Optional[dict]:
-    """Parse individual roster player entry from top-level rosters."""
+    """Parse individual roster player entry from top-level rosters.
+    
+    Args:
+        player_block: Player data from roster
+        home_away: 'home' or 'away'
+        team_id: Team ID
+        team_name: Team display name
+        substitutions: Dict mapping athlete_id to substitution info {
+            'subbed_out_minute': int or None,
+            'subbed_in_minute': int or None
+        }
+        match_duration: Total match duration in minutes (default 90, +extra time if applicable)
+    """
     if not isinstance(player_block, dict):
         return None
     
@@ -652,8 +666,15 @@ def _parse_roster_player_entry(
     stats = player_block.get("stats", [])
     parsed_stats = _parse_player_stat_array(stats) if isinstance(stats, list) else {}
     
-    # Minutes played
-    minutes_played = parsed_stats.get("minutes")
+    # Minutes played - DERIVE FROM SUBSTITUTION DATA
+    minutes_played = _derive_minutes_played(
+        is_starter=bool(is_starter),
+        subbed_in=player_block.get("subbedIn", False),
+        subbed_out=player_block.get("subbedOut", False),
+        athlete_id=athlete_id,
+        substitutions=substitutions,
+        match_duration=match_duration
+    )
     
     return {
         "player_id": athlete_id,
@@ -674,6 +695,59 @@ def _parse_roster_player_entry(
         "offsides": parsed_stats.get("offsides"),
         "saves": parsed_stats.get("saves"),
     }
+
+
+def _derive_minutes_played(
+    is_starter: bool,
+    subbed_in: bool,
+    subbed_out: bool,
+    athlete_id: str,
+    substitutions: Optional[Dict[str, Dict[str, Any]]],
+    match_duration: int
+) -> Optional[int]:
+    """Derive minutes played from starter status and substitution events.
+    
+    Args:
+        is_starter: Whether player started the match
+        subbed_in: Whether player was subbed in
+        subbed_out: Whether player was subbed out
+        athlete_id: Player's athlete ID
+        substitutions: Dict with substitution timing info
+        match_duration: Total match duration in minutes
+        
+    Returns:
+        Minutes played (int) or None if cannot derive
+    """
+    if not is_starter and not subbed_in:
+        # Player on bench, never entered
+        return 0
+    
+    if substitutions and athlete_id in substitutions:
+        sub_info = substitutions[athlete_id]
+        subbed_out_minute = sub_info.get('subbed_out_minute')
+        subbed_in_minute = sub_info.get('subbed_in_minute')
+        
+        if is_starter and subbed_out_minute is not None:
+            # Starter who was substituted out
+            return subbed_out_minute
+        elif is_starter and not subbed_out:
+            # Starter who played full match
+            return match_duration
+        elif not is_starter and subbed_in_minute is not None:
+            # Sub who came in
+            return max(0, match_duration - subbed_in_minute)
+    
+    # Fallback estimates without precise substitution timing
+    if is_starter and not subbed_out:
+        return match_duration
+    elif is_starter and subbed_out:
+        # Estimate: assume subbed out around 60-75'
+        return 70
+    elif subbed_in:
+        # Estimate: assume subbed in around 60-70'
+        return 25
+    
+    return 0
 
 
 def _parse_player_stat_array(stats: List[Any]) -> Dict[str, Optional[float]]:
