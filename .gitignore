@@ -1,4 +1,1 @@
-```
-# Backup files
-*.bak*
-```
+Nothing should be ignored based on the provided file changes. The modification of 'predicciones/src/data/espn_stats_parsers.py' is a source code file change, which does not require any new ignore rules.

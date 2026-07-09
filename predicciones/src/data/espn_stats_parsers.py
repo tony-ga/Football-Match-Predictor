@@ -228,15 +228,17 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
     Extract player-level statistics from ESPN summary response.
     
     Looks for player stats in:
-    - rosters[].roster[] (top-level)
-    - leaders[].leaders[] with athlete info
-    - keyEvents participants (goals, cards)
-    - boxscore.players[] or boxscore.teams[].players (fallback)
+    - data.rosters[].roster[] (primary source for FIFA/soccer)
+    - data.boxscore.teams[].players[] (fallback)
+    - keyEvents participants (only for cards, NOT for goals to avoid double-counting)
+    
+    CRITICAL: Do NOT use leaders[] for goals/assists/shots as they contain
+    season/tournament cumulative stats, not per-match stats.
     
     Returns list of player stat dicts with normalized fields.
     
     Args:
-        summary: Raw ESPN summary JSON
+        summary: Raw ESPN summary JSON (may have data wrapped in "data" key)
         
     Returns:
         List of player stat dictionaries
@@ -246,11 +248,18 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
     if not summary:
         return players
     
+    # ESPN wraps actual data in "data" key
+    # Handle both raw summary and wrapped summary
+    data_block = summary.get("data", {}) if isinstance(summary, dict) else {}
+    
+    # Use data block if available, otherwise fall back to summary directly
+    source = data_block if data_block else summary
+    
     seen_ids = set()
     
     # Format 1: Top-level rosters (most reliable for FIFA/soccer)
-    # Structure: summary['rosters'][].roster[]
-    rosters = summary.get("rosters", [])
+    # Structure: source['rosters'][].roster[]
+    rosters = source.get("rosters", [])
     if isinstance(rosters, list):
         for roster_entry in rosters:
             if not isinstance(roster_entry, dict):
@@ -271,21 +280,14 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                         seen_ids.add(player_data["player_id"])
                         players.append(player_data)
     
-    # Format 2: Leaders with athlete stats
-    # Structure: summary['leaders'][].leaders[].athlete
-    # CRITICAL: Leaders contain SEASON/TOURNAMENT cumulative stats, NOT per-match stats.
-    # We should NOT use leaders for goals/assists/shots to avoid inflating player stats.
-    # Only use leaders for metadata (player name, position) if needed elsewhere.
-    # Skipping this section entirely for player stats extraction.
-    # 
-    # Original code commented out to prevent double-counting:
-    # leaders = summary.get("leaders", [])
-    # ... (removed ~80 lines of leader parsing)
+    # CRITICAL: Skip leaders[] section entirely - contains cumulative stats, not per-match
+    # Original code that was causing inflation has been removed
     
-    # Format 3: Key events for goals/cards
-    key_events = summary.get("keyEvents", [])
+    # Format 2: Key events ONLY for cards (NOT for goals)
+    # Goals should come from roster stats, not events, to avoid double-counting
+    key_events = source.get("keyEvents", [])
     if not key_events:
-        key_events = summary.get("plays", [])
+        key_events = source.get("plays", [])
     
     if isinstance(key_events, list):
         for event in key_events:
@@ -295,14 +297,10 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
             event_type = event.get("type", {}).get("text", "").lower()
             event_text = (event.get("text") or "").lower()
             
-            # Determine event type
+            # Only process card events from key_events
+            # Goals are already captured in roster stats
             parsed_event_type = None
-            if "goal" in event_type or "goal" in event_text:
-                if "own" in event_text:
-                    parsed_event_type = "own_goal"
-                else:
-                    parsed_event_type = "goal"
-            elif "yellow" in event_text and "card" in event_text:
+            if "yellow" in event_text and "card" in event_text:
                 parsed_event_type = "yellow_card"
             elif "red" in event_text and "card" in event_text:
                 parsed_event_type = "red_card"
@@ -326,7 +324,7 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                 if not athlete_id:
                     continue
                 
-                # Check if we already have this player
+                # Check if we already have this player from roster
                 existing_player = None
                 for p in players:
                     if p["player_id"] == athlete_id:
@@ -334,24 +332,8 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                         break
                 
                 if existing_player:
-                    # Update existing player with event data
-                    # CRITICAL FIX: Do NOT add goals from events if stats already have goals.
-                    # Stats from boxscore/roster are the source of truth for goals/assists/shots.
-                    # Events should only be used for cards and as fallback for players not in roster.
-                    
-                    # Goals: Only update if existing_player has no goals from stats (None)
-                    # This prevents double-counting when both stats and events report goals
-                    if parsed_event_type == "goal":
-                        if existing_player.get("goals") is None:
-                            # Fallback: use event goal only when stats don't have goals
-                            existing_player["goals"] = 1
-                        # else: stats already have goals, trust them, do not add from events
-                    
-                    elif parsed_event_type == "own_goal":
-                        # Don't count own goals as regular goals
-                        pass
-                    
-                    elif parsed_event_type == "yellow_card":
+                    # Update existing player with card data
+                    if parsed_event_type == "yellow_card":
                         existing_player["yellow_cards"] = (existing_player["yellow_cards"] or 0) + 1
                         existing_player["total_cards"] = (existing_player["total_cards"] or 0) + 1
                     
@@ -359,7 +341,8 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                         existing_player["red_cards"] = (existing_player["red_cards"] or 0) + 1
                         existing_player["total_cards"] = (existing_player["total_cards"] or 0) + 1
                 else:
-                    # Create new player entry from event
+                    # Create new player entry from event (for players not in roster)
+                    # This is rare but can happen for late subs or data inconsistencies
                     seen_ids.add(athlete_id)
                     display_name = athlete.get("displayName", "")
                     short_name = athlete.get("shortName", "")
@@ -371,7 +354,6 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                         team_id = ""
                         team_name = ""
                     
-                    goals = 1 if parsed_event_type == "goal" else None
                     yellow_cards = 1 if parsed_event_type == "yellow_card" else None
                     red_cards = 1 if parsed_event_type == "red_card" else None
                     
@@ -383,7 +365,7 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                         "team_home_away": "",
                         "is_starter": False,
                         "minutes": None,
-                        "goals": goals,
+                        "goals": None,  # Don't assign goals from events
                         "assists": None,
                         "shots": None,
                         "shots_on_target": None,
@@ -396,28 +378,63 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                     }
                     players.append(player_data)
     
-    # Format 4: Fallback to boxscore structure
-    boxscore = summary.get("boxscore", {})
+    # Format 3: Fallback to boxscore structure if no roster data found
+    if not players:
+        boxscore = source.get("boxscore", {})
+        
+        # Format 3a: boxscore.teams[].players
+        teams_data = boxscore.get("teams", [])
+        if isinstance(teams_data, list):
+            for team_block in teams_data:
+                home_away = team_block.get("homeAway", "")
+                team_info = team_block.get("team", {})
+                team_id = str(team_info.get("id", ""))
+                team_name = team_info.get("displayName", "")
+                
+                players_list = team_block.get("players", [])
+                if isinstance(players_list, list):
+                    for p in players_list:
+                        if not isinstance(p, dict):
+                            continue
+                        
+                        athlete = p.get("athlete", {})
+                        if not isinstance(athlete, dict):
+                            athlete = p
+                        
+                        player_id = str(athlete.get("id") or p.get("id") or "")
+                        if not player_id or player_id in seen_ids:
+                            continue
+                        
+                        seen_ids.add(player_id)
+                        
+                        # Parse stats
+                        stats = p.get("stats", [])
+                        parsed_stats = _parse_player_stat_array(stats) if isinstance(stats, list) else {}
+                        
+                        is_starter = p.get("starter", False) or athlete.get("starter", False)
+                        
+                        player_data = {
+                            "player_id": player_id,
+                            "display_name": athlete.get("displayName") or p.get("displayName") or "",
+                            "short_name": athlete.get("shortName") or p.get("shortName") or "",
+                            "position": athlete.get("position", {}).get("abbreviation", "") if isinstance(athlete.get("position"), dict) else str(athlete.get("position", "")),
+                            "team_home_away": home_away,
+                            "is_starter": bool(is_starter),
+                            "minutes": p.get("minutes"),
+                            "goals": parsed_stats.get("goals"),
+                            "assists": parsed_stats.get("assists"),
+                            "shots": parsed_stats.get("shots"),
+                            "shots_on_target": parsed_stats.get("shots_on_target"),
+                            "yellow_cards": parsed_stats.get("yellow_cards"),
+                            "red_cards": parsed_stats.get("red_cards"),
+                            "total_cards": parsed_stats.get("total_cards"),
+                            "fouls": parsed_stats.get("fouls"),
+                            "offsides": parsed_stats.get("offsides"),
+                            "saves": parsed_stats.get("saves"),
+                        }
+                        players.append(player_data)
     
-    # Format 4a: boxscore.players is a list
-    raw_players = boxscore.get("players", [])
-    if isinstance(raw_players, list):
-        for p in raw_players:
-            if not isinstance(p, dict):
-                continue
-            player_id = str(p.get("id") or p.get("athlete", {}).get("id") or "")
-            if not player_id or player_id in seen_ids:
-                continue
-            seen_ids.add(player_id)
-            # Parse using standard method
-            athlete = p.get("athlete", {})
-            if isinstance(athlete, dict):
-                player_id = str(athlete.get("id") or player_id)
-            
-            display_name = (
-                p.get("displayName") or 
-                athlete.get("displayName") or 
-                p.get("name") or 
+    return players or 
                 athlete.get("name") or
                 ""
             )
