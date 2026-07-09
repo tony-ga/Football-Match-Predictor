@@ -877,11 +877,15 @@ def players_command(
                 competitions = set()
                 league_slugs = set()
                 if player_stats_path.exists():
+                    # Convert canonical_team (Spanish display name) to JSONL team name (English)
+                    from predicciones.src.utils.team_normalization import get_jsonl_team_name
+                    jsonl_team = get_jsonl_team_name(canonical_team)
+                    
                     with open(player_stats_path, 'r', encoding='utf-8') as f:
                         seen_events = set()
                         for line in f:
                             record = json.loads(line)
-                            if record.get("team", "").lower() == canonical_team.lower():
+                            if record.get("team", "").lower() == jsonl_team.lower():
                                 eid = record.get("event_id")
                                 if eid and eid not in seen_events:
                                     seen_events.add(eid)
