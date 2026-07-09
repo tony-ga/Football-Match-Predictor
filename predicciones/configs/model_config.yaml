@@ -16,7 +16,11 @@ dixon_coles:
   home_advantage: 0.25 # log-scale home advantage prior
   time_decay_xi: 0.003 # temporal decay per day (0 = no decay)
   min_lambda: 0.05    # floor for expected goals
-  max_lambda: 5.0     # ceiling for expected goals
+  max_lambda: 4.0     # ceiling for expected goals (reduced from 5.0 for realism)
+  
+  # Lambda warning thresholds (log warnings but don't clip)
+  lambda_warning_threshold: 3.0        # Warn if individual lambda > 3.0
+  lambda_total_warning_threshold: 5.0  # Warn if total lambda > 5.0
   
   # Markov features integration (Fase 3)
   use_markov_features: true
@@ -26,6 +30,22 @@ dixon_coles:
     early: 0.20  # 0-30 min
     mid: 0.15    # 31-75 min
     late: 0.10   # 76+ min
+
+# Lambda recalibration settings
+lambda_recalibration:
+  # Fallback scaling parameters (conservative to avoid inflation)
+  scale_a: 0.85  # Multiplicative factor (<1 reduces lambdas)
+  scale_b: 0.15  # Additive factor (small positive minimum)
+  
+  # Context-aware compression settings
+  compression:
+    strength: 0.6  # How aggressively to pull towards historical mean (0.0-1.0)
+    
+    # Maximum total lambda by competition type (prevents 6+ goal expectations)
+    world_cup_max: 3.8   # FIFA World Cup: ~2.5-2.7 avg, max ~3.8
+    friendly_max: 3.8    # Friendlies: ~2.4-2.8 avg, max ~3.8
+    league_top_max: 4.2  # Top leagues: ~2.7-3.0 avg, max ~4.2
+    default_max: 4.0     # Default fallback
 
 # Feature weights for lambda estimation
 # These are used when no trained DC parameters are available (prior / heuristic mode)

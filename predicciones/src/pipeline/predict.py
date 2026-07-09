@@ -505,11 +505,33 @@ def predict_match_pipeline(
     
     raw_lambda_h, raw_lambda_a = dc_model.predict_lambdas(home_features, away_features)
     
-    # Load and run Lambda Recalibrator
+    # Load and run Lambda Recalibrator with context-aware compression
     recalibrator_path = "output/calibrators/lambda_recalibrator.pkl"
     try:
         recalibrator = LambdaRecalibrator.load(recalibrator_path, config=config)
-        lambda_h, lambda_a = recalibrator.recalibrate(raw_lambda_h, raw_lambda_a)
+        # Extract competition context for better calibration
+        competition_name = fixture.get('competition', 'International Friendly')
+        competition_slug = fixture.get('league', None)
+        
+        # Determine competition type for context-aware compression
+        if 'world' in competition_name.lower() or 'cup' in competition_name.lower():
+            comp_type = 'world_cup'
+        elif 'friendly' in competition_name.lower():
+            comp_type = 'friendly'
+        elif any(league in competition_name.lower() for league in ['premier', 'la liga', 'serie a', 'bundesliga', 'ligue 1']):
+            comp_type = 'league_top'
+        else:
+            comp_type = 'default'
+        
+        lambda_h, lambda_a = recalibrator.recalibrate(
+            raw_lambda_h, raw_lambda_a,
+            competition_type=comp_type,
+            competition_slug=competition_slug
+        )
+        logger.info(
+            f"Lambda recalibrated: ({raw_lambda_h:.3f}, {raw_lambda_a:.3f}) -> "
+            f"({lambda_h:.3f}, {lambda_a:.3f}), total: {lambda_h + lambda_a:.3f}"
+        )
     except FileNotFoundError:
         logger.warning("Lambda recalibrator not found, using raw lambdas")
         lambda_h, lambda_a = raw_lambda_h, raw_lambda_a
