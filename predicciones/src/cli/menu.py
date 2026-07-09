@@ -149,27 +149,38 @@ class InteractiveMenu:
         predict_command(fixture_path, output_dir, verbose)
     
     def _pipeline_menu(self) -> None:
-        """Daily pipeline menu with suggested dates."""
+        """Daily pipeline menu with suggested dates from valid fixtures."""
         self.console.print("\n[bold]Run Daily Pipeline[/bold]")
         
         # Import helpers
-        from predicciones.src.cli.commands import list_available_predictions, list_available_reports
+        from predicciones.src.cli.commands import list_available_predictions, list_available_reports, list_available_fixtures, _is_valid_date_format
         
-        # Get available dates from predictions and reports
+        # Get available dates from predictions, reports, AND fixtures
         predictions = list_available_predictions()
         reports = list_available_reports()
+        fixtures = list_available_fixtures()
         
-        # Extract unique dates
+        # Extract unique dates - only include valid date formats
         available_dates = set()
         for p in predictions:
-            available_dates.add(p.get('date', ''))
+            date = p.get('date', '')
+            if _is_valid_date_format(date):
+                available_dates.add(date)
         for r in reports:
-            available_dates.add(r.get('date', ''))
+            date = r.get('date', '')
+            if _is_valid_date_format(date):
+                available_dates.add(date)
+        for f in fixtures:
+            date = f.get('date', '')
+            # Only add fixture dates that are valid YYYYMMDD format
+            # and have at least 1 match
+            if _is_valid_date_format(date) and f.get('matches', 0) > 0:
+                available_dates.add(date)
         
         available_dates = sorted([d for d in available_dates if d])
         
         if available_dates:
-            self.console.print("\n[green]✓ Available dates from existing data:[/green]")
+            self.console.print(f"\n[green]✓ Found {len(available_dates)} dated fixture(s) with matches:[/green]")
             for idx, date in enumerate(available_dates, 1):
                 self.console.print(f"  [cyan]{idx}.[/cyan] {date}")
             
@@ -189,7 +200,7 @@ class InteractiveMenu:
             # Suggest today's date or next match day
             from datetime import datetime
             suggested_date = datetime.now().strftime("%Y%m%d")
-            self.console.print(f"[dim]Suggested: {suggested_date}[/dim]")
+            self.console.print(f"[dim]No dated fixtures found. Suggested: {suggested_date}[/dim]")
             date = Prompt.ask(
                 "[cyan]Date to process (YYYYMMDD)[/cyan]",
                 default=suggested_date
@@ -197,6 +208,13 @@ class InteractiveMenu:
         
         if not date:
             self.console.print("[yellow]Date is required.[/yellow]")
+            return
+        
+        # Validate date format before proceeding
+        if not _is_valid_date_format(date):
+            self.console.print(f"\n[bold red]Invalid date format: {date}[/bold red]")
+            self.console.print("[red]Please enter a valid date in YYYYMMDD format (e.g., 20250715).[/red]")
+            self.console.print("[dim]Note: Labels like 'worldcup' are not valid dates.[/dim]")
             return
         
         output_dir = Prompt.ask(

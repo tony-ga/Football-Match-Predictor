@@ -708,12 +708,34 @@ def pipeline_command(
             verbose=verbose
         )
         
-        console.print("\n[bold green]✓ Pipeline completed successfully![/bold green]")
-        console.print(f"\nGenerated files:")
-        console.print(f"  📋 Fixtures:      {outputs['fixtures']}")
-        console.print(f"  📊 Predictions:   {outputs['predictions']}")
-        console.print(f"  📝 Report (MD):   {outputs['report_md']}")
-        console.print(f"  📈 Summary (CSV): {outputs['report_csv']}")
+        # Handle different status outcomes
+        status = outputs.get('status', 'unknown')
+        
+        if status == 'no_fixtures':
+            console.print("\n[bold yellow]⚠️  PIPELINE ABORTED: No fixtures found[/bold yellow]")
+            console.print(f"[yellow]{outputs.get('message', 'No fixtures found for selected date')}[/yellow]")
+            console.print(f"\n[dim]Fixtures file (empty): {outputs['fixtures']}[/dim]")
+            console.print("\n[bold]Reason:[/bold] Missing API keys or no fixtures returned from APIs")
+            console.print("\n[bold]To fix this:[/bold]")
+            console.print("  1. Set FOOTBALL_DATA_TOKEN environment variable, OR")
+            console.print("  2. Set API_FOOTBALL_KEY environment variable, OR")
+            console.print("  3. Use an existing dated fixture file with matches")
+            
+        elif status == 'no_predictions':
+            console.print("\n[bold yellow]⚠️  PIPELINE COMPLETED WITH NO PREDICTIONS[/bold yellow]")
+            console.print(f"[yellow]{outputs.get('message', 'No predictions could be generated')}[/yellow]")
+            console.print(f"\n📋 Fixtures found: [green]{outputs.get('fixtures_count', 0)}[/green]")
+            console.print(f"📊 Predictions:   [yellow]{outputs.get('predictions_count', 0)}[/yellow]")
+            console.print(f"\n[dim]Fixtures file: {outputs['fixtures']}[/dim]")
+            console.print(f"[dim]Predictions file (empty): {outputs['predictions']}[/dim]")
+            
+        else:
+            console.print("\n[bold green]✓ Pipeline completed successfully![/bold green]")
+            console.print(f"\nGenerated files:")
+            console.print(f"  📋 Fixtures:      {outputs['fixtures']} ({outputs.get('fixtures_count', 0)} matches)")
+            console.print(f"  📊 Predictions:   {outputs['predictions']} ({outputs.get('predictions_count', 0)} matches)")
+            console.print(f"  📝 Report (MD):   {outputs['report_md']}")
+            console.print(f"  📈 Summary (CSV): {outputs['report_csv']}")
         
     except ImportError:
         # Fallback: manual pipeline execution
@@ -728,6 +750,7 @@ def pipeline_command(
             df = fetch_fixtures_for_date(date)
             if len(df) == 0:
                 console.print("[yellow]No fixtures found for this date.[/yellow]")
+                console.print("\n[bold red]Pipeline aborted - no fixtures to process.[/bold red]")
                 return
             
             fixture_path = save_fixtures(df, date)

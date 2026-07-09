@@ -105,7 +105,17 @@ def fetch_fixtures_for_date(date_str: str, api_client: Optional[FootballAPIClien
     except Exception as e:
         logger.warning(f"API-Football failed: {e}")
     
-    # Strategy 3: Try open football sources for major leagues
+    # Strategy 3: Check for existing local fixture file as fallback
+    if not fixtures:
+        try:
+            fixtures_from_file = _load_existing_fixture(date_str)
+            if fixtures_from_file:
+                fixtures.extend(fixtures_from_file)
+                logger.info(f"Loaded {len(fixtures_from_file)} fixtures from existing local file")
+        except Exception as e:
+            logger.debug(f"No existing fixture file found: {e}")
+    
+    # Strategy 4: Try open football sources for major leagues
     if not fixtures:
         try:
             fixtures_from_api = _fetch_from_open_sources(normalized_date)
@@ -130,6 +140,49 @@ def fetch_fixtures_for_date(date_str: str, api_client: Optional[FootballAPIClien
         # Return empty DataFrame with valid columns
         logger.warning(f"No fixtures found for date {normalized_date}")
         return pd.DataFrame(columns=['date', 'league', 'home_team', 'away_team', 'kickoff_datetime'])
+
+
+def _load_existing_fixture(date_str: str) -> List[Dict[str, Any]]:
+    """
+    Load existing fixture file for the given date if it exists and has matches.
+    
+    Returns list of fixture dicts or empty list if file doesn't exist or is empty.
+    """
+    from pathlib import Path
+    
+    # Normalize date for filename
+    try:
+        normalized = parse_date(date_str)
+        date_obj = datetime.strptime(normalized, "%Y-%m-%d")
+        filename_date = date_obj.strftime("%Y%m%d")
+    except ValueError:
+        return []
+    
+    # Check both possible locations
+    fixture_paths = [
+        project_root / "data" / "fixtures" / f"{filename_date}.csv",
+        project_root / "predicciones" / "data" / "fixtures" / f"{filename_date}.csv",
+    ]
+    
+    for fixture_path in fixture_paths:
+        if fixture_path.exists():
+            try:
+                df = pd.read_csv(fixture_path)
+                if len(df) > 0:
+                    fixtures = []
+                    for _, row in df.iterrows():
+                        fixtures.append({
+                            'date': row.get('date', normalized),
+                            'league': row.get('league', 'Unknown'),
+                            'home_team': row.get('home_team', ''),
+                            'away_team': row.get('away_team', ''),
+                            'kickoff_datetime': row.get('kickoff_datetime', ''),
+                        })
+                    return fixtures
+            except Exception:
+                continue
+    
+    return []
 
 
 def _fetch_from_football_data(api_client: FootballAPIClient, date_str: str) -> List[Dict[str, Any]]:

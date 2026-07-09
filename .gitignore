@@ -1,1 +1,30 @@
-Nothing should be ignored based on the provided file changes. The only modified file is a Python source file (`predicciones/src/cli/commands.py`), which should not be added to .gitignore.
+```
+# Data output files
+predicciones/output/
+# Temporary and cache files
+*.tmp
+*.swp
+# Environment files
+.env
+.env.local
+.env.*
+# Python specific
+__pycache__/
+*.pyc
+*.pyo
+.Python
+# Logs
+*.log
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+# OS generated files
+.DS_Store
+Thumbs.db
+```

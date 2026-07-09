@@ -64,7 +64,7 @@ def parse_date(date_str: str) -> str:
     raise ValueError(f"Unrecognized date format: {date_str}")
 
 
-def run_fetch_fixtures(date_str: str, verbose: bool = False) -> Path:
+def run_fetch_fixtures(date_str: str, verbose: bool = False) -> tuple:
     """
     Step 1: Fetch fixtures for the given date.
     
@@ -73,7 +73,7 @@ def run_fetch_fixtures(date_str: str, verbose: bool = False) -> Path:
         verbose: Enable verbose logging.
     
     Returns:
-        Path to fixtures CSV file.
+        Tuple of (Path to fixtures CSV file, DataFrame with fixtures).
     """
     from scripts.fetch_daily_fixtures import fetch_fixtures_for_date, save_fixtures
     
@@ -89,10 +89,10 @@ def run_fetch_fixtures(date_str: str, verbose: bool = False) -> Path:
     else:
         logger.info(f"Fetched {len(df)} fixtures")
     
-    return output_path
+    return output_path, df
 
 
-def run_predictions(fixture_path: Path, date_str: str, config: Optional[Dict[str, Any]] = None) -> Path:
+def run_predictions(fixture_path: Path, date_str: str, config: Optional[Dict[str, Any]] = None, fixtures_df=None) -> tuple:
     """
     Step 2: Run predictions on fixtures.
     
@@ -100,15 +100,32 @@ def run_predictions(fixture_path: Path, date_str: str, config: Optional[Dict[str
         fixture_path: Path to fixtures CSV.
         date_str: Date string.
         config: Optional model configuration.
+        fixtures_df: Optional DataFrame with fixtures (to check if empty).
     
     Returns:
-        Path to predictions CSV file.
+        Tuple of (Path to predictions CSV file, predictions DataFrame).
     """
     from scripts.run_daily_predictions import DailyPredictionRunner
     
     logger.info("=" * 60)
     logger.info("STEP 2: Running predictions")
     logger.info("=" * 60)
+    
+    # Check if fixtures are empty
+    if fixtures_df is not None and len(fixtures_df) == 0:
+        logger.warning("No fixtures to process - skipping predictions")
+        # Return empty DataFrame and path
+        output_dir = project_root / "output" / "daily_predictions"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        normalized_date = parse_date(date_str)
+        date_obj = datetime.strptime(normalized_date, "%Y-%m-%d")
+        filename_date = date_obj.strftime("%Y%m%d")
+        
+        output_path = output_dir / f"{filename_date}_predictions.csv"
+        empty_df = pd.DataFrame(columns=['home_team', 'away_team', 'prediction'])
+        empty_df.to_csv(output_path, index=False)
+        return output_path, empty_df
     
     # Initialize runner
     runner = DailyPredictionRunner(config)
@@ -130,7 +147,7 @@ def run_predictions(fixture_path: Path, date_str: str, config: Optional[Dict[str
     
     logger.info(f"Predictions saved to {output_path} ({len(predictions_df)} matches)")
     
-    return output_path
+    return output_path, predictions_df
 
 
 def run_generate_report(predictions_path: Path, date_str: str) -> tuple:
@@ -162,7 +179,7 @@ def run_daily_pipeline(
     date_str: str,
     config: Optional[Dict[str, Any]] = None,
     verbose: bool = False
-) -> Dict[str, Path]:
+) -> Dict[str, Any]:
     """
     Run the complete daily prediction pipeline.
     
@@ -172,8 +189,11 @@ def run_daily_pipeline(
         verbose: Enable verbose logging.
     
     Returns:
-        Dict with paths to all generated files.
+        Dict with paths to all generated files and status information.
+        If no fixtures found, returns early with 'status': 'no_fixtures'.
     """
+    import pandas as pd
+    
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
@@ -186,10 +206,48 @@ def run_daily_pipeline(
     logger.info(f"Filename date: {filename_date}")
     
     # Step 1: Fetch fixtures
-    fixture_path = run_fetch_fixtures(date_str, verbose)
+    fixture_path, fixtures_df = run_fetch_fixtures(date_str, verbose)
+    
+    # Check if no fixtures were found - abort early
+    if fixtures_df is None or len(fixtures_df) == 0:
+        logger.warning("=" * 60)
+        logger.warning("PIPELINE ABORTED: No fixtures found")
+        logger.warning("=" * 60)
+        logger.warning("Reason: No API keys configured or no fixtures returned from APIs")
+        logger.warning("Solution: Configure FOOTBALL_DATA_TOKEN or API_FOOTBALL_KEY,")
+        logger.warning("         or use an existing dated fixture with matches.")
+        logger.warning("=" * 60)
+        
+        return {
+            'status': 'no_fixtures',
+            'fixtures': fixture_path,
+            'predictions': None,
+            'report_md': None,
+            'report_csv': None,
+            'message': 'No fixtures found for selected date'
+        }
     
     # Step 2: Run predictions
-    predictions_path = run_predictions(fixture_path, date_str, config)
+    predictions_path, predictions_df = run_predictions(fixture_path, date_str, config, fixtures_df)
+    
+    # Check if predictions are empty
+    if predictions_df is None or len(predictions_df) == 0:
+        logger.warning("=" * 60)
+        logger.warning("PIPELINE COMPLETED WITH NO PREDICTIONS")
+        logger.warning("=" * 60)
+        logger.warning("Fixtures were found but no predictions could be generated.")
+        logger.warning("=" * 60)
+        
+        return {
+            'status': 'no_predictions',
+            'fixtures': fixture_path,
+            'predictions': predictions_path,
+            'report_md': None,
+            'report_csv': None,
+            'message': 'No predictions generated - fixtures had no processable matches',
+            'fixtures_count': len(fixtures_df),
+            'predictions_count': 0
+        }
     
     # Step 3: Generate report
     md_path, csv_path = run_generate_report(predictions_path, date_str)
@@ -200,14 +258,21 @@ def run_daily_pipeline(
     logger.info("=" * 60)
     
     outputs = {
+        'status': 'success',
         'fixtures': fixture_path,
         'predictions': predictions_path,
         'report_md': md_path,
-        'report_csv': csv_path
+        'report_csv': csv_path,
+        'fixtures_count': len(fixtures_df),
+        'predictions_count': len(predictions_df)
     }
     
     for name, path in outputs.items():
-        logger.info(f"  {name}: {path}")
+        if name not in ['status', 'fixtures_count', 'predictions_count', 'message']:
+            logger.info(f"  {name}: {path}")
+    
+    logger.info(f"  fixtures_count: {len(fixtures_df)}")
+    logger.info(f"  predictions_count: {len(predictions_df)}")
     
     return outputs
 
@@ -245,16 +310,40 @@ def main():
     # Run pipeline
     outputs = run_daily_pipeline(args.date, config, args.verbose)
     
-    # Print summary
+    # Print summary based on status
     print("\n" + "=" * 60)
-    print("DAILY PIPELINE COMPLETED SUCCESSFULLY")
-    print("=" * 60)
-    print(f"\nGenerated files:")
-    print(f"  📋 Fixtures:      {outputs['fixtures']}")
-    print(f"  📊 Predictions:   {outputs['predictions']}")
-    print(f"  📝 Report (MD):   {outputs['report_md']}")
-    print(f"  📈 Summary (CSV): {outputs['report_csv']}")
-    print()
+    
+    status = outputs.get('status', 'unknown')
+    
+    if status == 'no_fixtures':
+        print("PIPELINE ABORTED: No fixtures found")
+        print("=" * 60)
+        print(f"\n⚠️  {outputs.get('message', 'No fixtures found for selected date')}")
+        print(f"\n📋 Fixtures file created (empty): {outputs['fixtures']}")
+        print("\nReason: Missing API keys or no fixtures returned from APIs")
+        print("\nTo fix this:")
+        print("  1. Set FOOTBALL_DATA_TOKEN environment variable, OR")
+        print("  2. Set API_FOOTBALL_KEY environment variable, OR")
+        print("  3. Use an existing dated fixture file with matches")
+        print()
+    elif status == 'no_predictions':
+        print("PIPELINE COMPLETED WITH NO PREDICTIONS")
+        print("=" * 60)
+        print(f"\n⚠️  {outputs.get('message', 'No predictions could be generated')}")
+        print(f"\n📋 Fixtures found: {outputs.get('fixtures_count', 0)}")
+        print(f"📊 Predictions:   {outputs.get('predictions_count', 0)}")
+        print(f"📋 Fixtures file: {outputs['fixtures']}")
+        print(f"📊 Predictions file (empty): {outputs['predictions']}")
+        print()
+    else:
+        print("DAILY PIPELINE COMPLETED SUCCESSFULLY")
+        print("=" * 60)
+        print(f"\nGenerated files:")
+        print(f"  📋 Fixtures:      {outputs['fixtures']} ({outputs.get('fixtures_count', 0)} matches)")
+        print(f"  📊 Predictions:   {outputs['predictions']} ({outputs.get('predictions_count', 0)} matches)")
+        print(f"  📝 Report (MD):   {outputs['report_md']}")
+        print(f"  📈 Summary (CSV): {outputs['report_csv']}")
+        print()
 
 
 if __name__ == "__main__":
