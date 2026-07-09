@@ -857,16 +857,16 @@ def players_command(
             player_stats = fetch_extended_player_stats(canonical_team, mode="summary")
             display_mode = "roster"
             
-            # Show matches used info
+            # Show matches used info - read directly from player_match_stats.jsonl
             if player_stats:
                 from pathlib import Path
                 import json
-                match_events_path = Path("/workspace/data/derived/match_events.jsonl")
                 player_stats_path = Path("/workspace/data/derived/player_match_stats.jsonl")
                 
                 # Get unique matches for this team from player_match_stats.jsonl
                 matches_used = []
                 competitions = set()
+                league_slugs = set()
                 if player_stats_path.exists():
                     with open(player_stats_path, 'r', encoding='utf-8') as f:
                         seen_events = set()
@@ -876,53 +876,41 @@ def players_command(
                                 eid = record.get("event_id")
                                 if eid and eid not in seen_events:
                                     seen_events.add(eid)
+                                    comp = record.get("competition", "Unknown")
+                                    league = record.get("league_slug", "")
                                     matches_used.append({
                                         "event_id": eid,
                                         "date": record.get("date", ""),
+                                        "competition": comp,
+                                        "league_slug": league,
+                                        "opponent": record.get("opponent", ""),
+                                        "home_or_away": record.get("home_or_away", ""),
                                     })
-                
-                # Try to enrich with competition info from match_events.jsonl
-                if match_events_path.exists():
-                    event_info = {}
-                    with open(match_events_path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            record = json.loads(line)
-                            eid = record.get("event_id")
-                            event_info[eid] = {
-                                "competition": record.get("competition", ""),
-                                "home_team": record.get("home_team", ""),
-                                "away_team": record.get("away_team", ""),
-                            }
-                    
-                    # Update matches with competition info
-                    for m in matches_used:
-                        eid = m["event_id"]
-                        if eid in event_info:
-                            info = event_info[eid]
-                            m["competition"] = info["competition"]
-                            m["home_team"] = info["home_team"]
-                            m["away_team"] = info["away_team"]
-                            competitions.add(info["competition"])
+                                    if comp and comp != "Unknown":
+                                        competitions.add(comp)
+                                    if league:
+                                        league_slugs.add(league)
                 
                 # Display matches used
                 if matches_used:
                     console.print("\n[bold]Matches used:[/bold]")
                     for m in sorted(matches_used, key=lambda x: x.get("date", "")):
-                        comp = m.get("competition", "Unknown")
-                        home = m.get("home_team", "")
-                        away = m.get("away_team", "")
                         date_str = (m.get("date", "") or "")[:10]
-                        if home and away:
-                            if home.lower() == canonical_team.lower():
-                                opponent = away
-                            else:
-                                opponent = home
-                            console.print(f"  [dim]{date_str} | {comp} | {canonical_team} vs {opponent}[/dim]")
+                        comp = m.get("competition", "Unknown")
+                        league = m.get("league_slug", "")
+                        opponent = m.get("opponent", "")
+                        hoa = m.get("home_or_away", "")
+                        home_display = "(H)" if hoa == "home" else "(A)" if hoa == "away" else ""
+                        
+                        if opponent:
+                            console.print(f"  [dim]{m.get('event_id')} | {date_str} | {comp} | {league} | {canonical_team} vs {opponent} {home_display}[/dim]")
                         else:
-                            console.print(f"  [dim]{date_str} | {comp} | Event {m.get('event_id')}[/dim]")
+                            console.print(f"  [dim]{m.get('event_id')} | {date_str} | {comp} | {league}[/dim]")
                     
                     if competitions:
                         console.print(f"\n[bold]Competitions included:[/bold] {', '.join(sorted(competitions))}")
+                    if league_slugs:
+                        console.print(f"[bold]League slugs:[/bold] {', '.join(sorted(league_slugs))}")
                     
         elif mode == "cards":
             console.print("[dim]Fetching card history per player...[/dim]")
