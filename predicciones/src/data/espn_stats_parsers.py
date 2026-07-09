@@ -273,84 +273,14 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
     
     # Format 2: Leaders with athlete stats
     # Structure: summary['leaders'][].leaders[].athlete
-    leaders = summary.get("leaders", [])
-    if isinstance(leaders, list):
-        for leader_category in leaders:
-            if not isinstance(leader_category, dict):
-                continue
-            
-            team_info = leader_category.get("team", {})
-            team_id = str(team_info.get("id", ""))
-            team_name = team_info.get("displayName", "")
-            home_away = ""
-            
-            leader_list = leader_category.get("leaders", [])
-            if isinstance(leader_list, list):
-                for leader_item in leader_list:
-                    if not isinstance(leader_item, dict):
-                        continue
-                    
-                    athlete = leader_item.get("athlete", {})
-                    if not isinstance(athlete, dict):
-                        continue
-                    
-                    athlete_id = str(athlete.get("id", ""))
-                    if not athlete_id or athlete_id in seen_ids:
-                        continue
-                    
-                    seen_ids.add(athlete_id)
-                    
-                    display_name = athlete.get("displayName", "")
-                    short_name = athlete.get("shortName", "")
-                    jersey = athlete.get("jersey", "")
-                    position_raw = athlete.get("position", {})
-                    if isinstance(position_raw, dict):
-                        position = position_raw.get("abbreviation", "")
-                    else:
-                        position = str(position_raw) if position_raw else ""
-                    
-                    # Get stat value from leader item
-                    stat_name = leader_item.get("name", "") or leader_item.get("displayName", "")
-                    stat_value = leader_item.get("displayValue", "") or leader_item.get("value")
-                    
-                    # Parse numeric value
-                    goals = None
-                    assists = None
-                    shots = None
-                    
-                    stat_lower = (stat_name or "").lower()
-                    if isinstance(stat_value, (int, float)):
-                        val = float(stat_value)
-                    else:
-                        val = _parse_float(stat_value) if stat_value else None
-                    
-                    if "goal" in stat_lower and "own" not in stat_lower:
-                        goals = val
-                    elif "assist" in stat_lower:
-                        assists = val
-                    elif "shot" in stat_lower:
-                        shots = val
-                    
-                    player_data = {
-                        "player_id": athlete_id,
-                        "display_name": display_name,
-                        "short_name": short_name,
-                        "position": position,
-                        "team_home_away": home_away,
-                        "is_starter": False,
-                        "minutes": None,
-                        "goals": goals,
-                        "assists": assists,
-                        "shots": shots,
-                        "shots_on_target": None,
-                        "yellow_cards": None,
-                        "red_cards": None,
-                        "total_cards": None,
-                        "fouls": None,
-                        "offsides": None,
-                        "saves": None,
-                    }
-                    players.append(player_data)
+    # CRITICAL: Leaders contain SEASON/TOURNAMENT cumulative stats, NOT per-match stats.
+    # We should NOT use leaders for goals/assists/shots to avoid inflating player stats.
+    # Only use leaders for metadata (player name, position) if needed elsewhere.
+    # Skipping this section entirely for player stats extraction.
+    # 
+    # Original code commented out to prevent double-counting:
+    # leaders = summary.get("leaders", [])
+    # ... (removed ~80 lines of leader parsing)
     
     # Format 3: Key events for goals/cards
     key_events = summary.get("keyEvents", [])
@@ -404,15 +334,27 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                         break
                 
                 if existing_player:
-                    # Update existing player with event
+                    # Update existing player with event data
+                    # CRITICAL FIX: Do NOT add goals from events if stats already have goals.
+                    # Stats from boxscore/roster are the source of truth for goals/assists/shots.
+                    # Events should only be used for cards and as fallback for players not in roster.
+                    
+                    # Goals: Only update if existing_player has no goals from stats (None)
+                    # This prevents double-counting when both stats and events report goals
                     if parsed_event_type == "goal":
-                        existing_player["goals"] = (existing_player["goals"] or 0) + 1
+                        if existing_player.get("goals") is None:
+                            # Fallback: use event goal only when stats don't have goals
+                            existing_player["goals"] = 1
+                        # else: stats already have goals, trust them, do not add from events
+                    
                     elif parsed_event_type == "own_goal":
                         # Don't count own goals as regular goals
                         pass
+                    
                     elif parsed_event_type == "yellow_card":
                         existing_player["yellow_cards"] = (existing_player["yellow_cards"] or 0) + 1
                         existing_player["total_cards"] = (existing_player["total_cards"] or 0) + 1
+                    
                     elif parsed_event_type == "red_card":
                         existing_player["red_cards"] = (existing_player["red_cards"] or 0) + 1
                         existing_player["total_cards"] = (existing_player["total_cards"] or 0) + 1
