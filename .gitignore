@@ -1,31 +1,23 @@
-```
-# Build artifacts and outputs
-output/
-
-# Environment files
-.env
-.env.local
-*.env.*
+```python
+# Compiled and build artifacts
+*.pyc
+__pycache__/
 
 # Dependencies
 .venv/
 venv/
-node_modules/
+pip-log.txt
+pip-selfcheck.json
 
-# Python specific
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg-info/
-dist/
-build/
-*.egg
-
-# Logs
+# Logs and temp files
 *.log
+*.tmp
+*.swp
+
+# Environment
+.env
+.env.local
+.env.*
 
 # Editors
 .vscode/
@@ -33,12 +25,20 @@ build/
 *.swp
 *.swo
 
-# OS generated files
+# Coverage reports
+.coverage
+htmlcov/
+coverage/
+
+# Python specific
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# System files
 .DS_Store
 Thumbs.db
-
-# Coverage reports
-coverage/
-htmlcov/
-.coverage
 ```
