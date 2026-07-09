@@ -1,6 +1,6 @@
 # ⚽ Football Prediction System v2.0
 
-Sistema profesional de predicción y análisis de partidos de fútbol con interfaz de consola mejorada.
+Sistema profesional de predicción y análisis de partidos de fútbol con interfaz de consola mejorada (CLI) basada en Typer.
 
 ## 🚀 Inicio Rápido
 
@@ -15,7 +15,7 @@ Esto abrirá el menú interactivo donde podrás navegar por todas las opciones.
 ### Modo CLI directo (usuarios avanzados)
 
 ```bash
-# Ver ayuda
+# Ver ayuda general
 python app.py --help
 
 # Generar predicciones desde fixture CSV
@@ -91,14 +91,14 @@ Menú Principal
 
 ```
 /workspace/
-├── app.py                      # Entry point principal
+├── app.py                      # Entry point principal (Typer CLI)
 ├── app_config.ini              # Configuración centralizada
 ├── predicciones/
 │   ├── src/
-│   │   ├── cli/                # Nueva capa CLI
-│   │   │   ├── __init__.py
-│   │   │   ├── menu.py         # Menú interactivo
-│   │   │   └── commands.py     # Lógica de comandos
+│   │   ├── cli/                # Capa CLI (nueva)
+│   │   │   ├── __init__.py     # Exporta InteractiveMenu y comandos
+│   │   │   ├── menu.py         # Menú interactivo con Rich
+│   │   │   └── commands.py     # Lógica de comandos Typer
 │   │   ├── models/             # Modelos de predicción
 │   │   ├── pipeline/           # Pipeline de predicción
 │   │   ├── features/           # Ingeniería de features
@@ -239,10 +239,16 @@ python app.py backtest \
 
 ## 🧩 Integración con Scripts Existentes
 
-Los comandos CLI reutilizan scripts existentes cuando están disponibles:
+Los comandos CLI reutilizan la lógica existente del proyecto:
 
-- `lambda-analysis` → ejecuta `scripts/analyze_lambda_distribution.py` si existe
-- `backtest` → ejecuta `scripts/backtest_temporal_calibration_v2.py` si existe
+- `predict` → `predicciones.src.pipeline.predict`
+- `pipeline` → `predicciones.scripts.run_daily_pipeline`
+- `daily-report` → `predicciones.scripts.generate_daily_report`
+- `lambda-analysis` → `predicciones.scripts.analyze_lambda_distribution`
+- `backtest` → `predicciones.scripts.backtest_temporal_calibration_v2`
+- `players` → `predicciones.src.data.api.get_team_players_stats`
+- `timelines` → `predicciones.src.data.api.get_match_timeline`
+- `fixtures` → `predicciones.src.data.api.get_fixtures_by_date`
 
 Esto mantiene compatibilidad con análisis previos mientras proporciona una interfaz unificada.
 
@@ -269,13 +275,30 @@ python app.py predict -f data/fixtures/test.csv --verbose
 
 O seleccionar "Modo detallado: yes" en el menú interactivo.
 
-## 🤝 Contribución
+## 🧑‍💻 Desarrollo y Extensión
 
-La arquitectura está diseñada para ser extensible:
+### Añadir Nuevos Comandos
 
-1. **Nuevos comandos**: Agregar función en `predicciones/src/cli/commands.py`
-2. **Nuevas opciones de menú**: Extender `InteractiveMenu.main_options` en `menu.py`
-3. **Nuevos modelos**: Implementar en `predicciones/src/models/`
+1. **Nueva función comando**: Agregar en `predicciones/src/cli/commands.py`
+   ```python
+   @typer_app.command()
+   def my_command(param: str = typer.Option(...)):
+       # Lógica usando módulos existentes
+   ```
+
+2. **Registrar en app.py**: Importar y añadir al Typer app
+   ```python
+   from predicciones.src.cli.commands import my_command
+   app.command()(my_command)
+   ```
+
+3. **Opción de menú (opcional)**: Extender `InteractiveMenu.main_options` en `menu.py`
+
+### Arquitectura CLI
+
+- **`app.py`**: Entry point con Typer, define comandos y opciones
+- **`menu.py`**: `InteractiveMenu` clase con menú interactivo usando Rich
+- **`commands.py`**: Funciones que envuelven lógica existente para Typer
 
 ## 📄 Licencia
 
