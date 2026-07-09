@@ -326,8 +326,42 @@ def list_available_reports() -> List[Dict[str, Any]]:
     return reports
 
 
+def _is_valid_date_format(date_str: str) -> bool:
+    """
+    Validate if a string is a valid date format for the pipeline.
+    
+    Accepts:
+        - YYYYMMDD (8 digits)
+        - YYYY-MM-DD (10 characters with dashes)
+    
+    Returns True if valid, False otherwise.
+    """
+    if not date_str or not isinstance(date_str, str):
+        return False
+    
+    # Check YYYYMMDD format (8 digits)
+    if len(date_str) == 8 and date_str.isdigit():
+        try:
+            from datetime import datetime
+            datetime.strptime(date_str, "%Y%m%d")
+            return True
+        except ValueError:
+            return False
+    
+    # Check YYYY-MM-DD format (10 characters)
+    if len(date_str) == 10:
+        try:
+            from datetime import datetime
+            datetime.strptime(date_str, "%Y-%m-%d")
+            return True
+        except ValueError:
+            return False
+    
+    return False
+
+
 def list_available_predictions() -> List[Dict[str, Any]]:
-    """List available prediction files."""
+    """List available prediction files with valid date formats only."""
     predictions = []
     
     pred_dirs = [
@@ -340,6 +374,9 @@ def list_available_predictions() -> List[Dict[str, Any]]:
             for file in sorted(pred_dir.glob("*.csv")):
                 try:
                     date_str = file.stem.split('_')[0]
+                    # Only include if it's a valid date format
+                    if not _is_valid_date_format(date_str):
+                        continue
                     predictions.append({
                         "date": date_str,
                         "type": "predictions",
