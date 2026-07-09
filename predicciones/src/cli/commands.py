@@ -547,9 +547,10 @@ def predict_command(
                 
                 if verbose and response:
                     predictions = response.get('predictions', {})
-                    p_home = predictions.get('p_home_win_markov', 0) * 100
-                    p_draw = predictions.get('p_draw_markov', 0) * 100
-                    p_away = predictions.get('p_away_win_markov', 0) * 100
+                    # Handle both old (p_home_win_markov) and new (1x2) formats
+                    p_home = predictions.get('p_home_win_markov') or predictions.get('1x2', {}).get('home', 0) * 100
+                    p_draw = predictions.get('p_draw_markov') or predictions.get('1x2', {}).get('draw', 0) * 100
+                    p_away = predictions.get('p_away_win_markov') or predictions.get('1x2', {}).get('away', 0) * 100
                     console.print(f"[dim]1X2: Home {p_home:.1f}% | Draw {p_draw:.1f}% | Away {p_away:.1f}%[/dim]")
                     
             except Exception as e:
