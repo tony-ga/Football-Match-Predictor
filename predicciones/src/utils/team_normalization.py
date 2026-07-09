@@ -38,6 +38,18 @@ DATASET_ALIASES = {
     "Korea": "South Korea",
     "S. Korea": "South Korea",
     "Republic of Korea": "South Korea",
+    
+    # Spanish to English mappings for international compatibility
+    "Francia": "France",
+    "Alemania": "Germany",
+    "España": "Spain",
+    "Inglaterra": "England",
+    "Marruecos": "Morocco",
+    "Suiza": "Switzerland",
+    "Países Bajos": "Netherlands",
+    "Holanda": "Netherlands",
+    "Corea del Sur": "South Korea",
+    "Estados Unidos": "United States",
 }
 
 
