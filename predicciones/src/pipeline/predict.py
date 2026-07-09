@@ -424,6 +424,8 @@ def predict_match_pipeline(
     match_date: str = None,
     neutral_venue: bool = False,
     include_markets: bool = True,
+    competition_name: str = "International Friendly",
+    competition_slug: str = None,
     **kwargs  # absorbe refresh_data, api_source, etc. para compatibilidad
 ) -> Dict[str, Any]:
     """
@@ -435,6 +437,8 @@ def predict_match_pipeline(
         match_date: Match date (YYYY-MM-DD), defaults to today
         neutral_venue: Whether match is at neutral venue
         include_markets: If True, include alternative markets (corners, cards, SOT, player props)
+        competition_name: Name of the competition (e.g., "International Friendly", "FIFA World Cup")
+        competition_slug: Slug for competition type (e.g., "fifa.world", "esp.1")
         
     Returns:
         Dict with match predictions and optional alternative markets
@@ -509,9 +513,6 @@ def predict_match_pipeline(
     recalibrator_path = "output/calibrators/lambda_recalibrator.pkl"
     try:
         recalibrator = LambdaRecalibrator.load(recalibrator_path, config=config)
-        # Extract competition context for better calibration
-        competition_name = fixture.get('competition', 'International Friendly')
-        competition_slug = fixture.get('league', None)
         
         # Determine competition type for context-aware compression
         if 'world' in competition_name.lower() or 'cup' in competition_name.lower():

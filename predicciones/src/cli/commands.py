@@ -572,11 +572,17 @@ def predict_command(
                 # Run prediction pipeline
                 match_date = date or fixture_row.get('date', datetime.now().strftime("%Y-%m-%d"))
                 
+                # Extract competition context (support both 'competition' and 'league' columns)
+                competition_name = fixture_row.get('competition') or fixture_row.get('league', 'International Friendly')
+                competition_slug = fixture_row.get('league', None)
+                
                 response = predict_match_pipeline(
                     home_team=home_team,
                     away_team=away_team,
                     match_date=match_date,
                     neutral_venue=fixture_row.get('neutral_venue', False),
+                    competition_name=competition_name,
+                    competition_slug=competition_slug,
                     refresh_data=False,
                     api_source="auto"
                 )
