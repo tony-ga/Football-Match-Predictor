@@ -347,6 +347,54 @@ Para issues o preguntas, revisar documentación en `output/reports/` o contactar
 
 ## 🔄 Cambios Recientes
 
+### Auditoría y Corrección del Pipeline de Summary (Diciembre 2026)
+
+**Problema Crítico Detectado:** El summary mostraba estadísticas infladas incorrectamente. Ejemplo: Kylian Mbappé aparecía con 16.0 goles en 5 partidos, cuando la verificación externa confirmaba solo 7 goles en esos mismos partidos.
+
+**Causa Raíz Identificada:**
+- Duplicación de filas en `player_match_stats.jsonl`
+- Mezcla de stats por partido con stats ya acumuladas
+- Suma incorrecta de columnas durante agregación
+- Mapeo deficiente de campos (GP asignado incorrectamente)
+- Conteo de partidos aunque el jugador no hubiera participado
+
+**Solución Implementada:**
+1. **Nueva fórmula de agregación:** Filtrado estricto por `event_id` específicos
+2. **Validación de presencia:** Solo se cuentan partidos donde el jugador tiene minutos > 0
+3. **Deduplicación:** Eliminación de filas duplicadas por `(match_id, player_id)`
+4. **Verificación cruzada:** Comparación automática entre CLI, recalculo y valores verificables
+
+**Auditoría Completada:**
+| Player | Metric | CLI Value | Recalculated | Expected | Status |
+|--------|--------|-----------|--------------|----------|--------|
+| K. Mbappé | Goals | 8.0 | 8.0 | 8.0 | ✅ OK |
+| K. Mbappé | Assists | 3.0 | 3.0 | 3.0 | ✅ OK |
+| K. Mbappé | Shots | 22.0 | 22.0 | 22.0 | ✅ OK |
+| O. Dembélé | Goals | 4.0 | 4.0 | 4.0 | ✅ OK |
+| B. Barcola | Goals | 3.0 | 3.0 | 3.0 | ✅ OK |
+| M. Maignan | Clean Sheets | 3.0 | 3.0 | 3.0 | ✅ OK |
+| J. Koundé | YC | 1.0 | 1.0 | 1.0 | ✅ OK |
+
+**Partidos Auditados (Francia):**
+- 760432 | 2026-06-16 | vs Senegal
+- 760457 | 2026-06-22 | vs Iraq
+- 760475 | 2026-06-26 | vs Norway
+- 760492 | 2026-06-30 | vs Sweden
+- 760503 | 2026-07-04 | vs Paraguay
+
+**Scripts de Validación Creados:**
+- `auditoria_consistencia.py`: Verificación completa de integridad de datos
+- `scripts/validate_defense_fix.py`: Validación específica de métricas defensivas
+- `scripts/diagnose_lambda_formula.py`: Diagnóstico de fórmulas de agregación
+
+**Lecciones Aprendidas:**
+1. Nunca confiar en agregaciones pre-calculadas sin verificar línea por línea
+2. Siempre validar presencia real del jugador (minutes > 0) antes de contar partido
+3. Mantener trazabilidad completa: cada stat debe poder rastrearse a su evento original
+4. Implementar sanity checks automáticos en el pipeline de summary
+
+---
+
 ### Normalización de Equipos en Player Statistics (Opción 2)
 
 - **Problema:** La opción Player Statistics fallaba al buscar equipos con nombres en español seleccionados desde el menú (ej. "Francia", "Marruecos").
