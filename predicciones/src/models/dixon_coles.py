@@ -243,6 +243,10 @@ class DixonColesModel:
         
         # Markov features configuration
         self.use_markov_features: bool = self.dc_config.get('use_markov_features', False)
+        self.markov_weight: float = self.dc_config.get('markov_weight', 0.18)  # Default 18%
+        self.markov_weight_schedule: Optional[Dict[str, float]] = self.dc_config.get(
+            'markov_weight_schedule', None
+        )  # Optional piecewise schedule by minute phase
         self.markov_event_probs = None
         self.markov_baselines = None
         
@@ -524,6 +528,39 @@ class DixonColesModel:
         )
         return lambda_h, lambda_a
     
+    def _get_markov_weight(self, match_state: Dict[str, Any]) -> float:
+        """
+        Get the Markov adjustment weight for the current match state.
+        
+        Supports two modes:
+        1. Constant weight: uses self.markov_weight (default 0.18)
+        2. Piecewise schedule: uses self.markov_weight_schedule based on minute phase
+        
+        Args:
+            match_state: Current match state dict with 'minute' key.
+        
+        Returns:
+            Float weight in [0, 1] range.
+        """
+        # If a piecewise schedule is defined, use it
+        if self.markov_weight_schedule:
+            minute = match_state.get('minute', 0)
+            
+            # Default piecewise schedule (can be overridden via config)
+            early_weight = self.markov_weight_schedule.get('early', 0.20)   # 0-30 min
+            mid_weight = self.markov_weight_schedule.get('mid', 0.15)      # 31-75 min
+            late_weight = self.markov_weight_schedule.get('late', 0.10)    # 76+ min
+            
+            if minute <= 30:
+                return early_weight
+            elif minute <= 75:
+                return mid_weight
+            else:
+                return late_weight
+        
+        # Otherwise use constant weight
+        return self.markov_weight
+    
     def _apply_markov_adjustment(
         self,
         lambda_h: float,
@@ -537,7 +574,9 @@ class DixonColesModel:
         observed patterns in similar states (minute, score_diff, cards).
         
         Adjustment formula:
-            lambda_adj = lambda_base * (markov_p_goal / baseline_p_goal)
+            lambda_adj = lambda_base * (1 + weight * (ratio - 1))
+        
+        where weight is configurable (default 0.18) and can vary by minute phase.
         
         Args:
             lambda_h: Base home lambda.
@@ -590,15 +629,18 @@ class DixonColesModel:
             home_ratio = home_markov['markov_p_goal_next_window'] / baseline_p_goal
             away_ratio = away_markov['markov_p_goal_next_window'] / baseline_p_goal
             
+            # Get weight for current match state (supports constant or piecewise schedule)
+            weight = self._get_markov_weight(match_state)
+            
             # Apply soft adjustment (dampen extreme ratios)
-            home_adjustment = 1.0 + 0.3 * (home_ratio - 1.0)  # 30% weight
-            away_adjustment = 1.0 + 0.3 * (away_ratio - 1.0)
+            home_adjustment = 1.0 + weight * (home_ratio - 1.0)
+            away_adjustment = 1.0 + weight * (away_ratio - 1.0)
             
             lambda_h_adj = lambda_h * home_adjustment
             lambda_a_adj = lambda_a * away_adjustment
             
             logger.debug(
-                f"Markov adjustment: home_ratio={home_ratio:.3f}, away_ratio={away_ratio:.3f} -> "
+                f"Markov adjustment (weight={weight:.2f}): home_ratio={home_ratio:.3f}, away_ratio={away_ratio:.3f} -> "
                 f"lambda_h: {lambda_h:.4f} -> {lambda_h_adj:.4f}, "
                 f"lambda_a: {lambda_a:.4f} -> {lambda_a_adj:.4f}"
             )
