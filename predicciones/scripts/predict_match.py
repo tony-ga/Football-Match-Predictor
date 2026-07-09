@@ -33,14 +33,14 @@ from rich.pretty import pprint
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.ingestion.json_parser import load_match_json
-from src.ingestion.schemas import MatchInput
-from src.pipeline.predict import predict_match_pipeline
-from src.data.espn_client_v2 import EspnClient
-from src.data.espn_normalizers import TeamNormalizer
-from src.application.match_selector import MatchSelector
-from src.domain.models import UpcomingMatch
-from src.domain.exceptions import (
+from predicciones.src.ingestion.json_parser import load_match_json
+from predicciones.src.ingestion.schemas import MatchInput
+from predicciones.src.pipeline.predict import predict_match_pipeline
+from predicciones.src.data.espn_client_v2 import EspnClient
+from predicciones.src.data.espn_normalizers import TeamNormalizer
+from predicciones.src.application.match_selector import MatchSelector
+from predicciones.src.domain.models import UpcomingMatch
+from predicciones.src.domain.exceptions import (
     EspnApiError,
     MatchSelectionError,
     MatchInputBuildError,
@@ -291,7 +291,7 @@ def mode_upcoming(args) -> None:
     console.print(f"Event ID: {selected_match.event_id}")
     
     # Build match input and run prediction
-    from src.domain.match_input_factory import MatchInputFactory
+    from predicciones.src.domain.match_input_factory import MatchInputFactory
     
     factory = MatchInputFactory()
     try:
@@ -323,7 +323,7 @@ def mode_match(args) -> None:
     console.print(f"[bold blue]Fetching match {args.event_id} from ESPN...[/bold blue]")
     
     try:
-        from src.domain.match_input_factory import build_match_input_from_espn_event
+        from predicciones.src.domain.match_input_factory import build_match_input_from_espn_event
         
         match_input = build_match_input_from_espn_event(args.event_id)
     except MatchInputBuildError as e:
@@ -350,7 +350,7 @@ def mode_teams(args) -> None:
     console.print(f"[bold blue]Building match: {args.home} vs {args.away}[/bold blue]")
     
     try:
-        from src.domain.match_input_factory import build_match_input_from_team_names
+        from predicciones.src.domain.match_input_factory import build_match_input_from_team_names
         
         match_input = build_match_input_from_team_names(
             home_team=args.home,

@@ -60,7 +60,7 @@ class TeamRatingsLoader:
         # Try to import team normalization for alias resolution
         self._normalizer = None
         try:
-            from src.utils.team_normalization import normalize_team_name
+            from predicciones.src.utils.team_normalization import normalize_team_name
             self._normalizer = normalize_team_name
             logger.debug("Team normalization module loaded successfully")
         except ImportError:

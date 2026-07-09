@@ -128,7 +128,7 @@ def fetch_match_summary(event_id: str, league: str = "fifa.world") -> Dict[str, 
         raise ValueError("Event ID cannot be empty")
     
     # Import here to avoid circular imports
-    from src.data.espn_client_v2 import EspnClient
+    from predicciones.src.data.espn_client_v2 import EspnClient
     
     client = EspnClient(league=league)
     summary = client.get_summary(event_id)
@@ -160,7 +160,7 @@ def fetch_match_core_plays(event_id: str, league: str = "fifa.world") -> Optiona
         Raw JSON response if available, None otherwise
     """
     try:
-        from src.data.espn_client_v2 import EspnClient
+        from predicciones.src.data.espn_client_v2 import EspnClient
         
         client = EspnClient(league=league)
         

@@ -282,3 +282,45 @@ def generate_synthetic_dataset(n_matches: int = 500, seed: int = 42) -> pd.DataF
     df["total_goals"] = df["home_score"] + df["away_score"]
     df["goal_diff"] = df["home_score"] - df["away_score"]
     return df
+
+
+def load_fixtures_csv(filepath: str | Path) -> pd.DataFrame:
+    """
+    Load a fixtures CSV file with upcoming matches.
+    
+    Expected columns: date, league, home_team, away_team, kickoff_datetime
+    or similar variations.
+    
+    Args:
+        filepath: Path to the fixtures CSV file.
+        
+    Returns:
+        DataFrame with standardized fixture columns.
+    """
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"Fixtures CSV not found: {path}")
+    
+    df = pd.read_csv(path)
+    logger.info("Loaded %d fixtures from %s", len(df), path)
+    
+    # Normalize column names
+    df.columns = [c.lower().strip() for c in df.columns]
+    
+    # Ensure required columns exist
+    required = ["home_team", "away_team"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+    
+    # Add optional columns with defaults
+    if "date" not in df.columns:
+        df["date"] = pd.Timestamp.now().strftime("%Y-%m-%d")
+    if "league" not in df.columns:
+        df["league"] = "International Friendly"
+    if "kickoff_datetime" not in df.columns:
+        df["kickoff_datetime"] = df["date"]
+    if "neutral_venue" not in df.columns:
+        df["neutral_venue"] = False
+    
+    return df

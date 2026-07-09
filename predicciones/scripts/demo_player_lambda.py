@@ -10,7 +10,7 @@ This demonstrates the fix for the issues described:
 import sys
 sys.path.insert(0, '/workspace/predicciones')
 
-from src.models.player_lambda import compute_all_player_lambdas, validate_player_lambdas
+from predicciones.src.models.player_lambda import compute_all_player_lambdas, validate_player_lambdas
 
 
 def demo_switzerland_colombia():

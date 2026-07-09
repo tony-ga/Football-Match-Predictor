@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Import canonical path helpers
-from src.utils.config_paths import get_derived_dir, get_cache_dir
-from src.utils.team_normalization import normalize_team_name as normalize_team_centralized
+from predicciones.src.utils.config_paths import get_derived_dir, get_cache_dir
+from predicciones.src.utils.team_normalization import normalize_team_name as normalize_team_centralized
 
 logger = logging.getLogger(__name__)
 

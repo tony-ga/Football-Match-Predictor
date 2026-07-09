@@ -9,9 +9,9 @@ from rich.pretty import pprint
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.ingestion.json_parser import load_match_json
-from src.pipeline.predict import predict_match_pipeline
-from src.utils.config_loader import config
+from predicciones.src.ingestion.json_parser import load_match_json
+from predicciones.src.pipeline.predict import predict_match_pipeline
+from predicciones.src.utils.config_loader import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

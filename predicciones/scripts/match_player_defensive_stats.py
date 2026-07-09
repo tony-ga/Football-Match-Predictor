@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.espn_client_v2 import EspnClient
+from predicciones.src.data.espn_client_v2 import EspnClient
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
