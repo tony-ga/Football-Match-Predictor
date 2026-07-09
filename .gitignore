@@ -1,4 +1,1 @@
-```
-# Backup files
-*.bak
-```
+Nothing needs to be added to .gitignore since the changes only include Python source files (.py) and JSONL data files, which are not build artifacts, dependencies, or temporary files that should be ignored.
