@@ -29,6 +29,7 @@ sys.path.insert(0, str(project_root))
 from src.models.dixon_coles import DixonColesModel
 from src.eval.probability_calibration import compute_match_probabilities
 from src.features.markov_features import build_state_from_match_context
+from src.data.team_ratings_loader import TeamRatingsLoader
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,17 +72,22 @@ class DailyPredictionRunner:
         df = runner.run_for_fixture(fixture_path)
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None, verbose: bool = False):
         """
         Initialize the prediction runner.
         
         Args:
             config: Model configuration dict. If None, uses DEFAULT_CONFIG.
+            verbose: Enable detailed logging for ratings lookup
         """
         self.config = config or DEFAULT_CONFIG.copy()
+        self.verbose = verbose
         
         # Initialize model
         self.model = DixonColesModel(self.config)
+        
+        # Initialize ratings loader
+        self.ratings_loader = TeamRatingsLoader()
         
         # Load Markov tables if available
         markov_dir = project_root / "output" / "markov"
@@ -115,26 +121,39 @@ class DailyPredictionRunner:
     
     def _build_team_features(self, team_name: str, is_home: bool) -> Dict[str, Any]:
         """
-        Build feature dict for a team.
+        Build feature dict for a team using real ratings from ratings_wc2026.json.
         
-        This is a simplified version that creates basic features from team name.
-        In production, this would use the full feature pipeline with historical data,
-        ratings, form, etc.
+        Uses TeamRatingsLoader to fetch attack/defense ratings based on team name.
+        Falls back to neutral defaults only if team is not found in ratings.
         
-        For now, we use heuristic defaults that the Dixon-Coles model can work with.
+        Args:
+            team_name: Team name from fixture
+            is_home: Whether team is playing at home
+            
+        Returns:
+            Feature dict compatible with DixonColesModel.predict_lambdas()
         """
-        # Basic features - in production these would come from feature pipeline
-        features = {
-            'nombre': team_name,
-            'attack_rating': 1.0,
-            'defense_rating': 1.0,
-            'form_factor': 1.0,
-            'ranking_factor': 1.0,
-            'h2h_factor': 1.0,
-            'squad_multiplier': 1.0,
-            'home_advantage_log': self.config.get('dixon_coles', {}).get('home_advantage', 0.25) if is_home else 0.0,
-            'context_modifier': 0.0,
-        }
+        home_advantage = self.config.get('dixon_coles', {}).get('home_advantage', 0.25)
+        
+        features, rating_info = self.ratings_loader.build_team_features(
+            team_name=team_name,
+            is_home=is_home,
+            home_advantage_log=home_advantage if is_home else 0.0,
+            verbose=self.verbose
+        )
+        
+        # Log detailed diagnostic info in verbose mode
+        if self.verbose:
+            logger.info(
+                f"[RATINGS] {team_name}: "
+                f"matched='{rating_info['matched_team_name']}', "
+                f"attack={features['attack_rating']:.3f}, "
+                f"defense={features['defense_rating']:.3f}, "
+                f"rank={rating_info['fifa_rank']}, "
+                f"ranking_factor={rating_info['ranking_factor']:.3f}, "
+                f"fallback={rating_info['used_default_fallback']}, "
+                f"source={rating_info['ratings_source']}"
+            )
         
         return features
     
@@ -269,6 +288,15 @@ class DailyPredictionRunner:
         if missing_cols:
             raise ValueError(f"Missing required columns: {missing_cols}")
         
+        # Log ratings summary at start
+        if self.verbose:
+            ratings_summary = self.ratings_loader.get_ratings_summary()
+            logger.info(
+                f"Ratings loaded: {ratings_summary['total_teams']} teams, "
+                f"avg_attack={ratings_summary['avg_attack']:.3f}, "
+                f"avg_defense={ratings_summary['avg_defense']:.3f}"
+            )
+        
         # Generate predictions for each match
         predictions = []
         for idx, row in df.iterrows():
@@ -364,6 +392,7 @@ def generate_sample_fixture(date_str: str, output_path: Path) -> Path:
 def run_for_date(
     date_str: str,
     config: Optional[Dict[str, Any]] = None,
+    verbose: bool = False,
 ) -> pd.DataFrame:
     """
     Convenience function to run predictions for a specific date.
@@ -373,6 +402,7 @@ def run_for_date(
     Args:
         date_str: Date in YYYYMMDD format.
         config: Optional model configuration.
+        verbose: Enable detailed logging for ratings lookup
     
     Returns:
         DataFrame with predictions.
@@ -389,7 +419,7 @@ def run_for_date(
         generate_sample_fixture(date_str, fixtures_dir)
     
     # Run predictions
-    runner = DailyPredictionRunner(config)
+    runner = DailyPredictionRunner(config, verbose=verbose)
     predictions_df = runner.run_for_fixture(str(fixture_path))
     
     # Save output
@@ -460,10 +490,10 @@ def main():
     # Determine input source
     if args.date:
         # Run for specific date
-        predictions_df = run_for_date(args.date, config)
+        predictions_df = run_for_date(args.date, config, verbose=args.verbose)
     elif args.fixture:
         # Run for specific fixture file
-        runner = DailyPredictionRunner(config)
+        runner = DailyPredictionRunner(config, verbose=args.verbose)
         predictions_df = runner.run_for_fixture(args.fixture)
         
         # Extract date from fixture filename for output
