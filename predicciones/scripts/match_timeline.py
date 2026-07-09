@@ -35,6 +35,35 @@ from src.data.espn_match_events import (
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# CLI Wrapper Functions - Stable API for CLI integration
+# =============================================================================
+
+def fetch_match_timeline(event_id: str, league: str = "fifa.world") -> Optional[Dict[str, Any]]:
+    """
+    Fetch match timeline from ESPN API.
+    
+    This is a stable wrapper function for CLI integration.
+    
+    Args:
+        event_id: ESPN event ID
+        league: League identifier (default: fifa.world)
+        
+    Returns:
+        Timeline dict with match info and events, or None on error
+    """
+    try:
+        timeline = get_match_event_timeline(
+            event_id=event_id,
+            league=league,
+            prefer_source="commentary",
+        )
+        return timeline
+    except Exception as e:
+        logger.error(f"Error fetching timeline for event {event_id}: {e}")
+        return None
+
+
 def print_match_summary(timeline: Dict[str, Any]) -> None:
     """Print match summary header."""
     match_info = timeline.get("match", {})

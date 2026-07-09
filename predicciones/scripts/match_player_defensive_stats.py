@@ -36,6 +36,65 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# CLI Wrapper Functions - Stable API for CLI integration
+# =============================================================================
+
+def fetch_team_players(team: str, max_matches: int = 10) -> Optional[Dict[str, Any]]:
+    """
+    Fetch player data for a team from ESPN API.
+    
+    This is a stable wrapper function for CLI integration.
+    
+    Args:
+        team: Team name
+        max_matches: Maximum number of matches to consider
+        
+    Returns:
+        Team data dict with players or None on error
+    """
+    # Note: This is a placeholder - actual implementation would need
+    # ESPN API integration to fetch team roster and match data
+    logger.warning(f"fetch_team_players: Direct team lookup not yet implemented for '{team}'")
+    return None
+
+
+def compute_player_stats(team_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Compute player statistics from team data.
+    
+    Args:
+        team_data: Team data from fetch_team_players
+        
+    Returns:
+        List of player stats dicts
+    """
+    if not team_data:
+        return []
+    
+    players = []
+    for team in team_data.get('teams', []):
+        for gk in team.get('goalkeepers', []):
+            players.append({
+                'name': gk.get('player_name', 'Unknown'),
+                'position': 'GK',
+                'matches': 1,
+                'saves': gk.get('saves'),
+                'goals_conceded': gk.get('goals_conceded'),
+            })
+        for of in team.get('outfield', []):
+            players.append({
+                'name': of.get('player_name', 'Unknown'),
+                'position': of.get('position', 'N/A'),
+                'matches': 1,
+                'offsides': of.get('offsides'),
+                'interceptions': of.get('interceptions'),
+                'clearances': of.get('clearances'),
+            })
+    
+    return players
+
+
 def fetch_match_summary(event_id: str, league: str) -> dict:
     """
     Fetch match summary from ESPN API.
