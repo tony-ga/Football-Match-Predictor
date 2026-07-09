@@ -564,17 +564,76 @@ def predict_command(
             import pandas as pd
             output_file = output_path / f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             
-            # Flatten results for CSV
+            # Flatten results for CSV, including fixture metadata
             flat_results = []
-            for r in results:
+            for idx, (r, fixture_row) in enumerate(zip(results, fixtures.itertuples(index=False))):
                 flat = {}
+                
+                # Add fixture metadata first (critical for identification)
+                flat['match_id'] = idx + 1
+                flat['home_team'] = fixture_row.home_team if hasattr(fixture_row, 'home_team') else fixture_row[2] if len(fixture_row) > 2 else 'Unknown'
+                flat['away_team'] = fixture_row.away_team if hasattr(fixture_row, 'away_team') else fixture_row[3] if len(fixture_row) > 3 else 'Unknown'
+                flat['competition'] = fixture_row.league if hasattr(fixture_row, 'league') else (fixture_row[1] if len(fixture_row) > 1 else 'N/A')
+                flat['date'] = fixture_row.date if hasattr(fixture_row, 'date') else (fixture_row[0] if len(fixture_row) > 0 else 'N/A')
+                flat['kickoff_datetime'] = fixture_row.kickoff_datetime if hasattr(fixture_row, 'kickoff_datetime') else (fixture_row[4] if len(fixture_row) > 4 else 'N/A')
+                flat['neutral_venue'] = fixture_row.neutral_venue if hasattr(fixture_row, 'neutral_venue') else (fixture_row[5] if len(fixture_row) > 5 else False)
+                
+                # Add response metadata if available
                 if 'metadata' in r:
                     flat.update(r['metadata'])
+                
+                # Add predictions with proper formatting
                 if 'predictions' in r:
-                    flat.update(r['predictions'])
+                    preds = r['predictions']
+                    # Format 1x2 as dict string
+                    if '1x2' in preds and isinstance(preds['1x2'], dict):
+                        flat['1x2'] = str(preds['1x2'])
+                    # Format btts as dict string
+                    if 'btts' in preds and isinstance(preds['btts'], dict):
+                        flat['btts'] = str(preds['btts'])
+                    # Format over_under as dict string
+                    if 'over_under' in preds and isinstance(preds['over_under'], dict):
+                        flat['over_under'] = str(preds['over_under'])
+                    # Format clean_sheets as dict string
+                    if 'clean_sheets' in preds and isinstance(preds['clean_sheets'], dict):
+                        flat['clean_sheets'] = str(preds['clean_sheets'])
+                    # Format team_totals as dict string
+                    if 'team_totals' in preds and isinstance(preds['team_totals'], dict):
+                        flat['team_totals'] = str(preds['team_totals'])
+                    # Format correct_scores as dict string
+                    if 'correct_scores' in preds and isinstance(preds['correct_scores'], dict):
+                        flat['correct_scores'] = str(preds['correct_scores'])
+                    # Format halftime as dict string
+                    if 'halftime' in preds and isinstance(preds['halftime'], dict):
+                        flat['halftime'] = str(preds['halftime'])
+                    # Format home_goals_distribution as list string
+                    if 'home_goals_distribution' in preds and isinstance(preds['home_goals_distribution'], list):
+                        flat['home_goals_distribution'] = str(preds['home_goals_distribution'])
+                    # Format away_goals_distribution as list string
+                    if 'away_goals_distribution' in preds and isinstance(preds['away_goals_distribution'], list):
+                        flat['away_goals_distribution'] = str(preds['away_goals_distribution'])
+                    # Add expected_goals
+                    if 'expected_goals' in preds:
+                        flat['expected_goals'] = str(preds['expected_goals'])
+                    # Add sanity_flags
+                    if 'sanity_flags' in preds:
+                        flat['sanity_flags'] = str(preds['sanity_flags'])
+                
                 flat_results.append(flat)
             
             df_results = pd.DataFrame(flat_results)
+            
+            # Ensure column order: metadata first, then predictions
+            base_columns = ['match_id', 'home_team', 'away_team', 'competition', 'date', 'kickoff_datetime', 'neutral_venue']
+            prediction_columns = ['1x2', 'btts', 'over_under', 'clean_sheets', 'team_totals', 'correct_scores', 'halftime', 'home_goals_distribution', 'away_goals_distribution', 'expected_goals', 'sanity_flags']
+            
+            # Get all columns, ensuring base columns come first
+            all_cols = base_columns + [c for c in prediction_columns if c in df_results.columns] + [c for c in df_results.columns if c not in base_columns and c not in prediction_columns]
+            
+            # Only keep columns that exist
+            final_columns = [c for c in all_cols if c in df_results.columns]
+            
+            df_results = df_results[final_columns]
             df_results.to_csv(output_file, index=False)
             console.print(f"\n[green]✓ Predictions saved to {output_file}[/green]")
         else:
