@@ -3,7 +3,7 @@
 ESPN Player Statistics Module.
 
 Provides functions to extract player statistics from ESPN data sources:
-- JSONL derived files (player_match_stats.jsonl)
+- JSONL derived files (player_match_stats.jsonl, match_events.jsonl)
 - ESPN API via summary endpoint
 
 Two main modes:
@@ -11,6 +11,10 @@ A. Roster/accumulated stats by team - aggregates player stats across matches
 B. Match-by-match player stats - returns per-player per-match statistics
 
 Supports team name normalization for Spanish/English aliases.
+
+New features:
+- Minutes played aggregation from player_match_stats.jsonl
+- Card timeline extraction from match_events.jsonl
 """
 from __future__ import annotations
 
@@ -43,6 +47,11 @@ def get_jsonl_player_stats_path() -> Path:
     return DERIVED_DATA_PATH / "player_match_stats.jsonl"
 
 
+def get_match_events_jsonl_path() -> Path:
+    """Get path to match_events.jsonl file."""
+    return DERIVED_DATA_PATH / "match_events.jsonl"
+
+
 def load_player_match_stats_jsonl() -> List[Dict[str, Any]]:
     """
     Load all player match statistics from JSONL file.
@@ -73,6 +82,40 @@ def load_player_match_stats_jsonl() -> List[Dict[str, Any]]:
         logger.error(f"Error reading JSONL file: {e}")
     
     return players
+
+
+def load_match_events_jsonl() -> List[Dict[str, Any]]:
+    """
+    Load all match events from JSONL file.
+    
+    Returns:
+        List of event dicts with fields:
+        - event_id, date, competition, home_team, away_team
+        - events: list of event objects with:
+          - sequence_index, minute, clock_display, period
+          - event_type, team_name, player_name, description
+          - clock_value (seconds), period_number
+    """
+    jsonl_path = get_match_events_jsonl_path()
+    if not jsonl_path.exists():
+        logger.warning(f"Match events JSONL not found: {jsonl_path}")
+        return []
+    
+    events = []
+    try:
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        record = json.loads(line)
+                        events.append(record)
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"Error parsing JSONL line: {e}")
+    except Exception as e:
+        logger.error(f"Error reading JSONL file: {e}")
+    
+    return events
 
 
 def normalize_team_for_lookup(team_name: str) -> str:
@@ -593,6 +636,324 @@ def main():
         print(output)
     
     return 0
+
+
+# =============================================================================
+# Card Timeline Functions - New feature for discipline tracking
+# =============================================================================
+
+def extract_card_events_from_match(match_event: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Extract card events (yellow/red) from a match event record.
+    
+    Args:
+        match_event: Match event dict with 'events' array
+        
+    Returns:
+        List of card event dicts with normalized fields
+    """
+    cards = []
+    events_list = match_event.get("events", [])
+    
+    for event in events_list:
+        event_type = event.get("event_type", "").lower()
+        description = event.get("description", "").lower()
+        
+        # Detect card events by type or description
+        is_yellow = "yellow" in event_type or "yellow card" in description
+        is_red = "red" in event_type or "red card" in description
+        
+        if not (is_yellow or is_red):
+            continue
+        
+        # Extract player name - try multiple sources
+        player_name = event.get("player_name")
+        if not player_name:
+            # Try to extract from description: "Player Name (Team) is shown..."
+            desc = event.get("description", "")
+            if "(" in desc and ")" in desc:
+                start = desc.find("(") + 1
+                end = desc.find(")")
+                potential_name = desc[start:end].strip()
+                # Only use if it looks like a name (not just team name)
+                if potential_name and " " in potential_name:
+                    player_name = potential_name
+        
+        # Also try raw_event.play.participants
+        if not player_name:
+            raw_event = event.get("raw_event", {})
+            play_info = raw_event.get("play", {})
+            participants = play_info.get("participants", [])
+            if participants:
+                athlete = participants[0].get("athlete", {})
+                player_name = athlete.get("displayName", "")
+        
+        if not player_name:
+            continue  # Skip if no player identified
+        
+        # Extract team name from raw_event.play.team
+        team_name = ""
+        raw_event = event.get("raw_event", {})
+        play_info = raw_event.get("play", {})
+        team_info = play_info.get("team", {})
+        if team_info:
+            team_name = team_info.get("displayName", "")
+        
+        # Fallback to event team_name or match teams
+        if not team_name:
+            team_name = event.get("team_name", "")
+        if not team_name:
+            # Infer from description
+            desc = event.get("description", "")
+            home = match_event.get("home_team", "")
+            away = match_event.get("away_team", "")
+            if home.lower() in desc.lower():
+                team_name = home
+            elif away.lower() in desc.lower():
+                team_name = away
+        
+        # Extract clock/timing info
+        clock_data = play_info.get("clock", {}) or raw_event.get("time", {})
+        
+        clock_value = clock_data.get("value", 0) or 0
+        clock_display = clock_data.get("displayValue", "") or ""
+        period_number = play_info.get("period", {}).get("number", 1) or event.get("period", 1)
+        
+        # Calculate minute from seconds
+        minute_value = int(clock_value // 60) if clock_value else 0
+        
+        card_type = "red" if is_red else "yellow"
+        
+        cards.append({
+            "event_id": match_event.get("event_id", ""),
+            "date": match_event.get("date", ""),
+            "competition": match_event.get("competition", ""),
+            "home_team": match_event.get("home_team", ""),
+            "away_team": match_event.get("away_team", ""),
+            "player_id": "",  # Not available in match_events.jsonl
+            "player_name": player_name,
+            "team_name": team_name,
+            "card_type": card_type,
+            "minute_display": clock_display or f"{minute_value}'",
+            "minute_value": minute_value,
+            "clock_seconds": int(clock_value) if clock_value else 0,
+            "period_number": period_number,
+        })
+    
+    return cards
+
+
+def fetch_player_card_timeline(
+    team_name: str,
+    max_matches: int = 10
+) -> List[Dict[str, Any]]:
+    """
+    Fetch chronological timeline of cards (yellow/red) for a team's players.
+    
+    Uses match_events.jsonl to extract card events with timing information.
+    
+    Args:
+        team_name: Team name (Spanish or English accepted)
+        max_matches: Maximum number of recent matches to include
+        
+    Returns:
+        List of card event dicts with fields:
+        - event_id, date, competition
+        - player_id, player_name, team_name
+        - opponent (derived from home/away)
+        - card_type (yellow/red)
+        - minute_display (e.g., "45+2'")
+        - minute_value (integer minute)
+        - clock_seconds (total seconds)
+        - period_number (1, 2, 3, 4)
+    """
+    # Normalize team name
+    normalized_team = normalize_team_for_lookup(team_name)
+    logger.info(f"Fetching card timeline for team: '{team_name}' -> '{normalized_team}'")
+    
+    # Load match events
+    all_matches = load_match_events_jsonl()
+    if not all_matches:
+        logger.warning("No match events available in JSONL")
+        return []
+    
+    # Filter matches involving this team and limit
+    team_matches = []
+    for match in all_matches:
+        home = match.get("home_team", "")
+        away = match.get("away_team", "")
+        
+        if home.lower() == normalized_team.lower() or away.lower() == normalized_team.lower():
+            team_matches.append(match)
+    
+    # Sort by date (most recent first) and limit
+    team_matches.sort(key=lambda x: x.get("date", ""), reverse=True)
+    team_matches = team_matches[:max_matches]
+    
+    logger.info(f"Found {len(team_matches)} matches for team: {normalized_team}")
+    
+    # Extract card events from each match
+    all_cards = []
+    for match in team_matches:
+        home = match.get("home_team", "")
+        away = match.get("away_team", "")
+        
+        # Determine opponent
+        if home.lower() == normalized_team.lower():
+            opponent = away
+        else:
+            opponent = home
+        
+        cards = extract_card_events_from_match(match)
+        
+        # Filter cards for our team only
+        for card in cards:
+            card_team = card.get("team_name", "")
+            if card_team.lower() == normalized_team.lower():
+                card["opponent"] = opponent
+                all_cards.append(card)
+    
+    # Sort by clock_seconds (chronological within matches), then by date
+    all_cards.sort(key=lambda x: (x.get("date", ""), x.get("clock_seconds", 0)))
+    
+    logger.info(f"Extracted {len(all_cards)} card events for team: {normalized_team}")
+    return all_cards
+
+
+def format_card_timeline_table(data: List[Dict[str, Any]]) -> str:
+    """
+    Format card timeline as ASCII table.
+    
+    Args:
+        data: List of card event dicts
+        
+    Returns:
+        Formatted table string
+    """
+    if not data:
+        return "No card events found."
+    
+    lines = []
+    lines.append("-" * 130)
+    lines.append(f"{'Date':<12} {'Match':<25} {'Player':<25} {'Card':<6} {'Minute':<10} {'Period':<8}")
+    lines.append("-" * 130)
+    
+    for card in data:
+        match_str = f"{card.get('team_name', '')} vs {card.get('opponent', '')}"
+        card_symbol = "🟨" if card.get("card_type") == "yellow" else "🟥"
+        
+        lines.append(
+            f"{(card.get('date') or '')[:10]:<12} "
+            f"{match_str:<25} "
+            f"{card.get('player_name', 'N/A'):<25} "
+            f"{card_symbol} {card.get('card_type', 'N/A'):<4} "
+            f"{card.get('minute_display', 'N/A'):<10} "
+            f"P{card.get('period_number', 1):<7}"
+        )
+    
+    lines.append("-" * 130)
+    lines.append(f"Total cards: {len(data)} (Yellow: {sum(1 for c in data if c.get('card_type') == 'yellow')}, Red: {sum(1 for c in data if c.get('card_type') == 'red')})")
+    
+    return "\n".join(lines)
+
+
+def format_card_timeline_csv(data: List[Dict[str, Any]]) -> str:
+    """
+    Format card timeline as CSV.
+    
+    Args:
+        data: List of card event dicts
+        
+    Returns:
+        CSV formatted string
+    """
+    if not data:
+        return ""
+    
+    import csv
+    import io
+    
+    output = io.StringIO()
+    fieldnames = [
+        "event_id", "date", "competition", "team_name", "opponent",
+        "player_name", "player_id", "card_type",
+        "minute_display", "minute_value", "clock_seconds", "period_number"
+    ]
+    
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+    writer.writeheader()
+    writer.writerows(data)
+    
+    return output.getvalue()
+
+
+# =============================================================================
+# Extended Player Statistics with submodes
+# =============================================================================
+
+def fetch_extended_player_stats(
+    team_name: str,
+    mode: str = "summary",
+    max_matches: int = 10
+) -> List[Dict[str, Any]]:
+    """
+    Fetch extended player statistics with various submodes.
+    
+    Args:
+        team_name: Team name (Spanish or English accepted)
+        mode: One of:
+            - "summary": Accumulated stats (GP, Min, Gls, Ast, YC, RC, Shots)
+            - "cards": Historical cards per player
+            - "timeline": Chronological card timeline by match
+        max_matches: Maximum matches to consider
+        
+    Returns:
+        List of stat dicts based on mode
+    """
+    if mode == "summary":
+        return fetch_team_roster_stats(team_name)
+    elif mode == "cards":
+        # Get card history grouped by player
+        cards = fetch_player_card_timeline(team_name, max_matches=max_matches)
+        
+        # Group by player
+        player_cards: Dict[str, Dict[str, Any]] = {}
+        for card in cards:
+            player_name = card.get("player_name", "")
+            if not player_name:
+                continue
+            
+            if player_name not in player_cards:
+                player_cards[player_name] = {
+                    "player_name": player_name,
+                    "team_name": card.get("team_name", ""),
+                    "yellow_cards": 0,
+                    "red_cards": 0,
+                    "card_details": []
+                }
+            
+            if card.get("card_type") == "yellow":
+                player_cards[player_name]["yellow_cards"] += 1
+            else:
+                player_cards[player_name]["red_cards"] += 1
+            
+            player_cards[player_name]["card_details"].append({
+                "date": card.get("date", ""),
+                "opponent": card.get("opponent", ""),
+                "card_type": card.get("card_type", ""),
+                "minute": card.get("minute_display", "")
+            })
+        
+        result = list(player_cards.values())
+        result.sort(key=lambda x: (-(x["yellow_cards"] + x["red_cards"]), x["player_name"]))
+        return result
+    
+    elif mode == "timeline":
+        return fetch_player_card_timeline(team_name, max_matches=max_matches)
+    
+    else:
+        logger.warning(f"Unknown mode: {mode}")
+        return []
 
 
 if __name__ == "__main__":
