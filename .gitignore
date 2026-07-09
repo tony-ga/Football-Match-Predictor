@@ -1,1 +1,18 @@
-Nothing should be ignored based on the provided file changes, as they only include source code files (.py) without any build artifacts, dependencies, or temporary files.
+```gitignore
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# Original rules preserved
+*.log
+```
