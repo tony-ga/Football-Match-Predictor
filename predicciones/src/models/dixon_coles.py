@@ -477,13 +477,21 @@ class DixonColesModel:
         Heuristic lambda estimation from feature dicts.
 
         Formula:
-            lambda_home = attack_home * defense_away * form_home *
+            lambda_home = attack_home * (1/defense_away) * form_home *
                           ranking_home * h2h_home * squad_home *
                           exp(home_adv + ctx_home)
 
-            lambda_away = attack_away * defense_home * form_away *
+            lambda_away = attack_away * (1/defense_home) * form_away *
                           ranking_away * h2h_away * squad_away *
                           exp(ctx_away)
+
+        SEMANTICS:
+            - attack_rating: >1.0 means stronger than average attack
+            - defense_rating: >1.0 means STRONGER defense (concedes LESS)
+            
+        Therefore, opponent's defense_rating is INVERTED:
+            - High defense_rating → LOW opponent lambda (hard to score against)
+            - Low defense_rating → HIGH opponent lambda (easy to score against)
 
         This ensures the model can run without any training data.
         """
@@ -499,8 +507,13 @@ class DixonColesModel:
         home_adv = home_features.get('home_advantage_log', 0.0)
         ctx_h = home_features.get('context_modifier', 0.0)
 
+        # INVERT opponent's defense: high defense_rating = hard to score against
+        # So opponent_defense_factor = 1.0 / defense_rating
+        # Add small epsilon to avoid division by zero
+        defense_a_inverse = 1.0 / max(defense_a, 0.1)
+
         lambda_h = (
-            attack_h * defense_a * LEAGUE_AVG_GOALS *
+            attack_h * defense_a_inverse * LEAGUE_AVG_GOALS *
             form_h * ranking_h * h2h_h * squad_h *
             np.exp(home_adv + ctx_h)
         )
@@ -514,8 +527,11 @@ class DixonColesModel:
         squad_a = away_features.get('squad_multiplier', 1.0)
         ctx_a = away_features.get('context_modifier', 0.0)
 
+        # INVERT opponent's defense
+        defense_h_inverse = 1.0 / max(defense_h, 0.1)
+
         lambda_a = (
-            attack_a * defense_h * LEAGUE_AVG_GOALS *
+            attack_a * defense_h_inverse * LEAGUE_AVG_GOALS *
             form_a * ranking_a * h2h_a * squad_a *
             np.exp(ctx_a)
         )
