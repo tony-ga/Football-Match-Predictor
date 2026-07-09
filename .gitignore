@@ -1,5 +1,5 @@
 ```
-# Compiled Python files
+# Compiled and build artifacts
 *.pyc
 __pycache__/
 
@@ -8,12 +8,12 @@ __pycache__/
 venv/
 node_modules/
 
-# Logs and temporary files
+# Logs and temp files
 *.log
 *.tmp
 *.swp
 
-# Environment files
+# Environment
 .env
 .env.local
 *.env.*
@@ -22,17 +22,21 @@ node_modules/
 .vscode/
 .idea/
 
-# Build artifacts
-dist/
-build/
-target/
-
 # Coverage reports
+.coverage
 coverage/
 htmlcov/
-.coverage
 
 # Python cache
 .mypy_cache/
 .pytest_cache/
+
+# Build directories
+dist/
+build/
+target/
+
+# System files
+.DS_Store
+Thumbs.db
 ```

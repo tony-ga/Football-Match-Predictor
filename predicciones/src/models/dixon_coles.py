@@ -238,8 +238,16 @@ class DixonColesModel:
         self.home_advantage: float = self.dc_config.get('home_advantage', 0.25)
         self.xi: float = self.dc_config.get('time_decay_xi', 0.003)
         self.min_lambda: float = self.dc_config.get('min_lambda', 0.05)
-        self.max_lambda: float = self.dc_config.get('max_lambda', 5.0)
+        # Default max_lambda reduced from 5.0 to 4.0 for more realistic football scores
+        # Typical high-scoring international matches have lambda_total ~3.0-3.5
+        # Individual team lambdas rarely exceed 2.5-3.0 except in extreme mismatches
+        self.max_lambda: float = self.dc_config.get('max_lambda', 4.0)
         self.max_goals: int = self.config.get('matrix', {}).get('max_goals', 8)
+        
+        # Sanity check thresholds for lambda diagnostics (configurable)
+        # These trigger warnings but don't clip values
+        self.lambda_warning_threshold: float = self.dc_config.get('lambda_warning_threshold', 3.0)
+        self.lambda_total_warning_threshold: float = self.dc_config.get('lambda_total_warning_threshold', 5.0)
         
         # Markov features configuration
         self.use_markov_features: bool = self.dc_config.get('use_markov_features', False)
@@ -518,13 +526,31 @@ class DixonColesModel:
                 lambda_h, lambda_a, match_state
             )
 
+        # Sanity checks for lambda values (log warnings but don't clip)
+        lambda_total = lambda_h + lambda_a
+        if lambda_h > self.lambda_warning_threshold:
+            logger.warning(
+                f"High lambda_home detected: {lambda_h:.4f} > {self.lambda_warning_threshold}. "
+                f"Match: {home_features.get('nombre', 'unknown')} vs {away_features.get('nombre', 'unknown')}"
+            )
+        if lambda_a > self.lambda_warning_threshold:
+            logger.warning(
+                f"High lambda_away detected: {lambda_a:.4f} > {self.lambda_warning_threshold}. "
+                f"Match: {home_features.get('nombre', 'unknown')} vs {away_features.get('nombre', 'unknown')}"
+            )
+        if lambda_total > self.lambda_total_warning_threshold:
+            logger.warning(
+                f"High lambda_total detected: {lambda_total:.4f} > {self.lambda_total_warning_threshold}. "
+                f"Match: {home_features.get('nombre', 'unknown')} vs {away_features.get('nombre', 'unknown')}"
+            )
+
         lambda_h = float(np.clip(lambda_h, self.min_lambda, self.max_lambda))
         lambda_a = float(np.clip(lambda_a, self.min_lambda, self.max_lambda))
 
-        logger.debug(
-            f"DC heuristic: lambda_h={lambda_h:.4f} (attack={attack_h:.3f}, "
-            f"def_a={defense_a:.3f}), lambda_a={lambda_a:.4f} "
-            f"(attack={attack_a:.3f}, def_h={defense_h:.3f})"
+        logger.info(
+            f"DC heuristic: lambda_h={lambda_h:.4f}, lambda_a={lambda_a:.4f}, "
+            f"lambda_total={lambda_h + lambda_a:.4f} "
+            f"(attack_h={attack_h:.3f}, def_a={defense_a:.3f}, attack_a={attack_a:.3f}, def_h={defense_h:.3f})"
         )
         return lambda_h, lambda_a
     
