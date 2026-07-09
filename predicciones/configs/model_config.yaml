@@ -17,6 +17,15 @@ dixon_coles:
   time_decay_xi: 0.003 # temporal decay per day (0 = no decay)
   min_lambda: 0.05    # floor for expected goals
   max_lambda: 5.0     # ceiling for expected goals
+  
+  # Markov features integration (Fase 3)
+  use_markov_features: true
+  markov_weight: 0.18  # Default constant weight (18%)
+  # Optional piecewise schedule by minute phase (overrides markov_weight if set)
+  markov_weight_schedule:
+    early: 0.20  # 0-30 min
+    mid: 0.15    # 31-75 min
+    late: 0.10   # 76+ min
 
 # Feature weights for lambda estimation
 # These are used when no trained DC parameters are available (prior / heuristic mode)

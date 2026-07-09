@@ -1,0 +1,15 @@
+{
+  "dixon_coles": {
+    "use_markov_features": true,
+    "markov_weight_schedule": {
+      "early": 0.20,
+      "mid": 0.15,
+      "late": 0.10
+    },
+    "rho": -0.13,
+    "home_advantage": 0.25
+  },
+  "matrix": {
+    "max_goals": 8
+  }
+}
