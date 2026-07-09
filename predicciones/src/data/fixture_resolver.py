@@ -283,18 +283,36 @@ class FixtureResolver:
             leagues_to_try = leagues
         
         all_fixtures = []
+        seen_event_ids = set()  # Track event IDs to avoid duplicates across leagues
         
         for league_slug in leagues_to_try:
             try:
                 fixtures = self._fetch_from_espn(espn_date, league_slug)
                 if fixtures:
                     logger.debug(f"ESPN {league_slug} returned {len(fixtures)} fixtures")
-                    all_fixtures.extend(fixtures)
+                    # Only add fixtures we haven't seen before (by event_id)
+                    for fixture in fixtures:
+                        event_id = fixture.get("match_id", "")
+                        if event_id and event_id not in seen_event_ids:
+                            seen_event_ids.add(event_id)
+                            all_fixtures.append(fixture)
+                        elif not event_id:
+                            # For fixtures without event_id, use composite key
+                            composite_key = (
+                                fixture.get("date", ""),
+                                fixture.get("kickoff_datetime", ""),
+                                fixture.get("home_team", ""),
+                                fixture.get("away_team", "")
+                            )
+                            # We'll handle these in post-processing dedup
+                            all_fixtures.append(fixture)
             except Exception as e:
                 logger.debug(f"ESPN {league_slug} failed: {e}")
         
         if all_fixtures:
             df = pd.DataFrame(all_fixtures)
+            # Apply final deduplication to catch any remaining duplicates
+            df = self._deduplicate_fixtures(df)
             return df, "espn"
         
         return pd.DataFrame(), "none"
@@ -401,6 +419,89 @@ class FixtureResolver:
                     continue
         
         return pd.DataFrame(), "none"
+    
+    def _deduplicate_fixtures(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Deduplicate fixtures using a robust strategy.
+        
+        Priority:
+        1. match_id (if exists and is reliable)
+        2. Composite key: (date, kickoff_datetime, home_team, away_team)
+        
+        When duplicates are found with different competitions:
+        - Keep the first occurrence (which comes from the highest-priority league)
+        - League priority order: FIFA World Cup > UEFA Champions League > Premier League > La Liga > others
+        
+        Args:
+            df: DataFrame with fixture data
+            
+        Returns:
+            Deduplicated DataFrame
+        """
+        if len(df) == 0:
+            return df
+        
+        logger.debug(f"Deduplicating {len(df)} fixtures...")
+        
+        # Define competition priority (lower number = higher priority)
+        competition_priority = {
+            "FIFA World Cup": 1,
+            "UEFA Champions League": 2,
+            "Premier League": 3,
+            "La Liga": 4,
+            "Serie A": 5,
+            "Bundesliga": 6,
+            "Ligue 1": 7,
+            "MLS": 8,
+            "Brasileirão": 9,
+            "Liga Profesional Argentina": 10,
+            "International Friendly": 11,
+        }
+        
+        def get_competition_priority(comp):
+            if pd.isna(comp) or comp == "":
+                return 999
+            return competition_priority.get(comp, 999)
+        
+        # First pass: deduplicate by match_id (if present)
+        if "match_id" in df.columns:
+            # Filter out empty match_ids
+            df_with_id = df[df["match_id"].notna() & (df["match_id"] != "")].copy()
+            df_without_id = df[df["match_id"].isna() | (df["match_id"] == "")].copy()
+            
+            if len(df_with_id) > 0:
+                # Sort by competition priority to keep highest priority first
+                df_with_id["_comp_priority"] = df_with_id["competition"].apply(get_competition_priority) if "competition" in df_with_id.columns else 999
+                df_with_id = df_with_id.sort_values("_comp_priority")
+                
+                # Drop duplicates keeping first (highest priority)
+                df_with_id = df_with_id.drop_duplicates(subset=["match_id"], keep="first")
+                df_with_id = df_with_id.drop(columns=["_comp_priority"])
+            
+            df = pd.concat([df_with_id, df_without_id], ignore_index=True) if len(df_without_id) > 0 else df_with_id
+        
+        # Second pass: deduplicate by composite key for remaining duplicates
+        # or for fixtures without match_id
+        composite_cols = ["date", "kickoff_datetime", "home_team", "away_team"]
+        
+        # Check if all composite columns exist
+        if all(col in df.columns for col in composite_cols):
+            # Sort by competition priority if column exists
+            if "competition" in df.columns:
+                df["_comp_priority"] = df["competition"].apply(get_competition_priority)
+                df = df.sort_values("_comp_priority")
+            
+            # Drop duplicates keeping first (highest priority)
+            df = df.drop_duplicates(subset=composite_cols, keep="first")
+            
+            if "_comp_priority" in df.columns:
+                df = df.drop(columns=["_comp_priority"])
+            
+            logger.debug(f"After deduplication: {len(df)} unique fixtures")
+        else:
+            logger.warning(f"Missing composite columns for deduplication: {[c for c in composite_cols if c not in df.columns]}")
+        
+        return df.reset_index(drop=True)
     
     def _normalize_dataframe(self, df: pd.DataFrame, filename_date: str) -> pd.DataFrame:
         """
