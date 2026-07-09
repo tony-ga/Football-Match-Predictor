@@ -65,75 +65,145 @@ def list_available_fixtures() -> List[Dict[str, Any]]:
 
 
 def list_available_timelines() -> List[Dict[str, Any]]:
-    """List available timeline data from output files."""
+    """
+    List available timeline data from ALL available sources in the project.
+    
+    Searches:
+    - output/*.json files with timeline/event data
+    - output/*timeline*.json files
+    - output/*recap*.json files (match summaries)
+    - output/advanced_team_stats*.json
+    - data/examples/*.json
+    - Any JSON file containing 'events' or 'match' keys
+    
+    Returns deduplicated list prioritizing World Cup matches.
+    """
     timelines = []
     
-    output_dirs = [
-        project_root / "output",
-        project_root / "predicciones" / "output",
+    # Define all search locations
+    search_patterns = [
+        # Output directory patterns
+        (project_root / "output", "*.json"),
+        (project_root / "predicciones" / "output", "*.json"),
+        # Data examples
+        (project_root / "data" / "examples", "*.json"),
+        (project_root / "predicciones" / "data" / "examples", "*.json"),
     ]
     
-    for output_dir in output_dirs:
-        if output_dir.exists():
-            # Look for timeline JSON files
-            for file in sorted(output_dir.glob("*timeline*.json")):
-                try:
-                    with open(file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    
-                    match_info = data.get('match', {})
-                    sources = data.get('sources', {})
-                    
-                    timelines.append({
-                        "match_id": data.get('event_id', file.stem.split('_')[-1] if '_' in file.stem else 'unknown'),
-                        "fixture": f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}",
-                        "date": match_info.get('date', 'N/A') or 'N/A',
-                        "competition": data.get('league', 'N/A'),
-                        "events": sources.get('total_events', len(data.get('events', []))),
-                        "status": match_info.get('status', 'N/A'),
-                        "path": str(file.relative_to(project_root)),
-                    })
-                except Exception:
-                    continue
+    processed_ids = set()
+    
+    for base_dir, pattern in search_patterns:
+        if not base_dir.exists():
+            continue
             
-            # Also check for any match JSON files that might contain timeline data
-            for file in sorted(output_dir.glob("*.json")):
-                if "timeline" in file.name.lower():
-                    continue  # Already processed
-                try:
-                    with open(file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    
-                    if 'events' in data or 'match' in data:
-                        match_info = data.get('match', {})
-                        timelines.append({
-                            "match_id": data.get('event_id', file.stem.split('_')[-1] if '_' in file.stem else 'unknown'),
-                            "fixture": f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}",
-                            "date": match_info.get('date', 'N/A') or 'N/A',
-                            "competition": data.get('league', 'N/A'),
-                            "events": len(data.get('events', [])),
-                            "status": match_info.get('status', 'N/A'),
-                            "path": str(file.relative_to(project_root)),
-                        })
-                except Exception:
+        for file in base_dir.glob(pattern):
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # Extract event_id
+                event_id = data.get('event_id')
+                if not event_id:
                     continue
+                
+                # Skip if already processed
+                if event_id in processed_ids:
+                    continue
+                processed_ids.add(event_id)
+                
+                # Extract match info from various possible locations
+                match_info = data.get('match', {})
+                if not match_info:
+                    # Try to build from root level
+                    match_info = {
+                        'short_name': data.get('short_name', ''),
+                        'home_team': data.get('home_team', ''),
+                        'away_team': data.get('away_team', ''),
+                        'status': data.get('status', ''),
+                        'date': data.get('date', ''),
+                    }
+                
+                # Build fixture name
+                if match_info.get('short_name'):
+                    fixture = match_info['short_name']
+                elif match_info.get('home_team') and match_info.get('away_team'):
+                    fixture = f"{match_info['home_team']} vs {match_info['away_team']}"
+                else:
+                    fixture = f"Match {event_id}"
+                
+                # Count events if available
+                events_count = 0
+                if 'events' in data:
+                    events_count = len(data['events'])
+                elif 'sources' in data and isinstance(data['sources'], dict):
+                    events_count = data['sources'].get('total_events', 0)
+                
+                # Determine competition/source type
+                competition = data.get('league', 'N/A')
+                source_type = "timeline" if 'events' in data else "recap" if 'team_stats' in data else "stats"
+                
+                # Check if World Cup related
+                is_world_cup = (
+                    competition == 'fifa.world' or
+                    'fifa' in str(file).lower() or
+                    'world' in str(file).lower() or
+                    any(team in fixture for team in ['Argentina', 'Brasil', 'France', 'England', 'España', 'Alemania', 'Italy'])
+                )
+                
+                timelines.append({
+                    "match_id": str(event_id),
+                    "fixture": fixture,
+                    "date": match_info.get('date', 'N/A') or 'N/A',
+                    "competition": competition,
+                    "events": events_count,
+                    "status": match_info.get('status', 'N/A'),
+                    "source_type": source_type,
+                    "path": str(file.relative_to(project_root)),
+                    "is_world_cup": is_world_cup,
+                })
+                
+            except Exception as e:
+                logger.debug(f"Error processing {file}: {e}")
+                continue
     
-    # Remove duplicates by match_id
-    seen = set()
-    unique_timelines = []
-    for t in timelines:
-        if t["match_id"] not in seen:
-            seen.add(t["match_id"])
-            unique_timelines.append(t)
+    # Sort: World Cup matches first, then by event count (more events = richer data)
+    timelines.sort(key=lambda x: (not x['is_world_cup'], -x['events']))
     
-    return unique_timelines
+    return timelines
 
 
 def list_available_teams() -> List[str]:
-    """Extract unique team names from available fixtures and predictions."""
-    teams = set()
+    """
+    Extract unique team names from ALL available sources, prioritizing World Cup national teams.
     
-    # From fixtures
+    Searches:
+    - Fixture CSVs in data/fixtures
+    - Prediction CSVs in output/daily_predictions
+    - JSON outputs with match/team data
+    - ratings_wc2026.json for official World Cup teams
+    
+    Returns sorted list with World Cup national teams first.
+    """
+    teams = set()
+    world_cup_teams = set()
+    
+    # Priority 1: Load from ratings_wc2026.json (official World Cup teams)
+    wc_ratings_paths = [
+        project_root / "data" / "ratings_wc2026.json",
+        project_root / "predicciones" / "data" / "ratings_wc2026.json",
+    ]
+    
+    for wc_path in wc_ratings_paths:
+        if wc_path.exists():
+            try:
+                with open(wc_path, 'r', encoding='utf-8') as f:
+                    wc_data = json.load(f)
+                wc_teams = wc_data.get('teams', {})
+                world_cup_teams.update(wc_teams.keys())
+            except Exception:
+                continue
+    
+    # Priority 2: From fixtures CSVs
     fixture_dirs = [
         project_root / "data" / "fixtures",
         project_root / "predicciones" / "data" / "fixtures",
@@ -146,14 +216,14 @@ def list_available_teams() -> List[str]:
                     with open(file, 'r', encoding='utf-8') as f:
                         reader = csv.DictReader(f)
                         for row in reader:
-                            if 'home_team' in row:
+                            if 'home_team' in row and row['home_team']:
                                 teams.add(row['home_team'])
-                            if 'away_team' in row:
+                            if 'away_team' in row and row['away_team']:
                                 teams.add(row['away_team'])
                 except Exception:
                     continue
     
-    # From predictions
+    # Priority 3: From prediction CSVs
     pred_dirs = [
         project_root / "output" / "daily_predictions",
         project_root / "predicciones" / "output" / "daily_predictions",
@@ -166,14 +236,68 @@ def list_available_teams() -> List[str]:
                     with open(file, 'r', encoding='utf-8') as f:
                         reader = csv.DictReader(f)
                         for row in reader:
-                            if 'home_team' in row:
+                            if 'home_team' in row and row['home_team']:
                                 teams.add(row['home_team'])
-                            if 'away_team' in row:
+                            if 'away_team' in row and row['away_team']:
                                 teams.add(row['away_team'])
                 except Exception:
                     continue
     
-    return sorted(list(teams))
+    # Priority 4: From JSON outputs
+    json_dirs = [
+        project_root / "output",
+        project_root / "predicciones" / "output",
+    ]
+    
+    for json_dir in json_dirs:
+        if json_dir.exists():
+            for file in json_dir.glob("*.json"):
+                try:
+                    with open(file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # Check for teams in various formats
+                    if 'match' in data:
+                        match_info = data['match']
+                        if match_info.get('home_team'):
+                            teams.add(match_info['home_team'])
+                        if match_info.get('away_team'):
+                            teams.add(match_info['away_team'])
+                    
+                    if 'home_team' in data and data['home_team']:
+                        teams.add(data['home_team'])
+                    if 'away_team' in data and data['away_team']:
+                        teams.add(data['away_team'])
+                    
+                    # Check rosters/teams arrays
+                    if 'teams' in data and isinstance(data['teams'], list):
+                        for team_entry in data['teams']:
+                            if isinstance(team_entry, dict):
+                                team_name = team_entry.get('team_name', '')
+                                if team_name:
+                                    teams.add(team_name)
+                except Exception:
+                    continue
+    
+    # Combine: World Cup teams first, then others
+    all_teams = sorted(list(teams))
+    wc_team_list = sorted(list(world_cup_teams))
+    
+    # Put World Cup teams at the front, remove duplicates
+    result = []
+    seen = set()
+    
+    for team in wc_team_list:
+        if team not in seen:
+            result.append(team)
+            seen.add(team)
+    
+    for team in all_teams:
+        if team not in seen:
+            result.append(team)
+            seen.add(team)
+    
+    return result
 
 
 def list_available_reports() -> List[Dict[str, Any]]:
