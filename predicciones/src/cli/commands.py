@@ -814,14 +814,21 @@ def players_command(
     team: str,
     max_matches: int = 10,
     output_format: str = "table",
+    mode: str = "roster",  # "roster" for accumulated, "match" for per-match
 ) -> None:
     """
     Get player statistics for a selected team.
     
-    Uses the match_player_defensive_stats script logic.
+    Uses the espn_player_stats module which reads from JSONL derived data.
     Normalizes team name to handle Spanish/English aliases.
+    
+    Args:
+        team: Team name (Spanish or English accepted)
+        max_matches: Maximum matches to consider (for match mode)
+        output_format: Output format ("table", "csv", "json")
+        mode: "roster" for accumulated stats, "match" for per-match stats
     """
-    # Normalize team name to canonical form for lookup
+    # Normalize team name for display
     from predicciones.src.utils.team_normalization import normalize_team_name
     canonical_team = normalize_team_name(team)
     
@@ -829,37 +836,60 @@ def players_command(
     console.print(f"[dim]Normalized team name: {canonical_team}[/dim]")
     
     try:
-        from predicciones.scripts.match_player_defensive_stats import (
-            fetch_team_players,
-            compute_player_stats,
+        from predicciones.scripts.espn_player_stats import (
+            fetch_team_roster_stats,
+            fetch_team_player_match_stats,
+            format_output_table,
+            format_output_csv,
+            format_output_json,
         )
         
-        # Fetch team data using normalized team name
-        console.print("[dim]Fetching team data...[/dim]")
-        team_data = fetch_team_players(canonical_team, max_matches=max_matches)
+        # Fetch data based on mode
+        if mode == "roster":
+            console.print("[dim]Fetching accumulated roster stats...[/dim]")
+            player_stats = fetch_team_roster_stats(canonical_team)
+            display_mode = "roster"
+        else:
+            console.print(f"[dim]Fetching match stats (max {max_matches} matches)...[/dim]")
+            player_stats = fetch_team_player_match_stats(canonical_team, max_matches=max_matches)
+            display_mode = "match"
         
-        if not team_data:
+        if not player_stats:
             console.print(f"[yellow]No data found for team: {team}[/yellow]")
             return
         
-        # Compute player stats
-        console.print("[dim]Computing player statistics...[/dim]")
-        player_stats = compute_player_stats(team_data)
+        # Log stats summary
+        console.print(f"[green]✓ Found {len(player_stats)} records[/green]")
         
+        # Display based on format
         if output_format == "table":
-            _display_player_stats_table(player_stats)
+            table_str = format_output_table(player_stats, mode=display_mode)
+            console.print(table_str)
         elif output_format == "csv":
-            _save_player_stats_csv(player_stats, team)
+            csv_str = format_output_csv(player_stats, mode=display_mode)
+            # Save CSV to file
+            from pathlib import Path
+            output_dir = Path("output/player_stats")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{canonical_team.replace(' ', '_')}_players_{mode}.csv"
+            output_path = output_dir / filename
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(csv_str)
+            console.print(f"[green]✓ Player stats saved to {output_path}[/green]")
         elif output_format == "json":
-            _display_player_stats_json(player_stats)
+            json_str = format_output_json(player_stats)
+            console.print(json_str)
         else:
             console.print(f"[yellow]Unknown output format: {output_format}[/yellow]")
             
     except ImportError as e:
         console.print(f"[bold red]Error: Player stats module not available: {e}[/bold red]")
-        console.print("[dim]This feature requires ESPN API integration.[/dim]")
+        console.print("[dim]This feature requires ESPN-derived JSONL data.[/dim]")
     except Exception as e:
         console.print(f"[bold red]Error fetching player stats: {e}[/bold red]")
+        import traceback
+        if console.is_terminal:
+            traceback.print_exc()
 
 
 def _display_player_stats_table(player_stats: list) -> None:
