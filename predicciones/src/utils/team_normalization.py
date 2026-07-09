@@ -375,6 +375,92 @@ def reverse_alias(canonical_name: str) -> str:
     return short_forms.get(canonical_name, canonical_name)
 
 
+def get_jsonl_team_name(canonical_name: str) -> str:
+    """
+    Convert a canonical team name (Spanish/display name) to the internal 
+    team name used in player_match_stats.jsonl and other ESPN-derived datasets.
+    
+    The JSONL files use English team names (e.g., "France", "Spain", "Germany"),
+    while the ratings file and CLI display use Spanish names (e.g., "Francia", 
+    "España", "Alemania").
+    
+    Args:
+        canonical_name: The canonical/display team name (typically Spanish)
+    
+    Returns:
+        The team name as it appears in JSONL datasets (typically English)
+    
+    Examples:
+        >>> get_jsonl_team_name("Francia")
+        'France'
+        >>> get_jsonl_team_name("España")
+        'Spain'
+        >>> get_jsonl_team_name("México")
+        'Mexico'
+        >>> get_jsonl_team_name("France")  # Already in English
+        'France'
+    """
+    if not canonical_name:
+        return ""
+    
+    # Mapping from Spanish/display names to English/JSONL names
+    spanish_to_english = {
+        "Francia": "France",
+        "Alemania": "Germany",
+        "España": "Spain",
+        "Inglaterra": "England",
+        "Marruecos": "Morocco",
+        "Suiza": "Switzerland",
+        "Países Bajos": "Netherlands",
+        "Holanda": "Netherlands",
+        "Corea del Sur": "South Korea",
+        "Estados Unidos": "United States",
+        "Japón": "Japan",
+        "Bélgica": "Belgium",
+        "Dinamarca": "Denmark",
+        "Turquía": "Turkey",
+        "Polonia": "Poland",
+        "Ucrania": "Ukraine",
+        "México": "Mexico",
+        "Canadá": "Canada",
+        "Panamá": "Panama",
+        "Brasil": "Brazil",
+        "Italia": "Italy",
+        "Croacia": "Croatia",
+        "Perú": "Peru",
+        "Nueva Zelanda": "New Zealand",
+        "República Democrática del Congo": "DR Congo",
+        "Camerún": "Cameroon",
+        "Egipto": "Egypt",
+        "Túnez": "Tunisia",
+        "Argelia": "Algeria",
+        "Arabia Saudita": "Saudi Arabia",
+        "Irán": "Iran",
+        "Costa Rica": "Costa Rica",
+        "Honduras": "Honduras",
+        "Serbia": "Serbia",
+        "Austria": "Austria",
+        "Portugal": "Portugal",
+        "Uruguay": "Uruguay",
+        "Colombia": "Colombia",
+        "Chile": "Chile",
+        "Ecuador": "Ecuador",
+        "Paraguay": "Paraguay",
+        "Bolivia": "Bolivia",
+        "Venezuela": "Venezuela",
+        "Senegal": "Senegal",
+        "Nigeria": "Nigeria",
+        "Ghana": "Ghana",
+        "Australia": "Australia",
+    }
+    
+    # If it's already an English name (like "France"), return as-is
+    # Check by seeing if the Spanish mapping points to something different
+    jsonl_name = spanish_to_english.get(canonical_name, canonical_name)
+    
+    return jsonl_name
+
+
 def is_valid_team(team_name: str) -> bool:
     """
     Check if a team name is recognized (either as alias or canonical).

@@ -1,1 +1,1 @@
-Nothing should be ignored based on the provided file changes. The only modified file is a Python source file (`predicciones/src/cli/commands.py`), which should not be added to .gitignore. Since there are no build artifacts, dependencies, temporary files, or other ignorable items in the changes, no .gitignore rules are needed.
+Nothing should be ignored based on the provided file changes, as they only include source code files (.py) without any build artifacts, dependencies, or temporary files.
