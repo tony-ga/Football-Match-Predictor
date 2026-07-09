@@ -182,8 +182,20 @@ def list_available_teams() -> List[str]:
     - JSON outputs with match/team data
     - ratings_wc2026.json for official World Cup teams
     
-    Returns sorted list with World Cup national teams first.
+    Uses team_normalization module to deduplicate teams with aliases (e.g., Francia/France).
+    Returns sorted list with World Cup national teams first, using Spanish display names.
     """
+    from predicciones.src.utils.team_normalization import get_unique_teams_for_menu
+    
+    # First, try to get unique teams from the normalization module
+    # This handles deduplication of aliases like Francia/France
+    unique_teams = get_unique_teams_for_menu()
+    
+    if unique_teams:
+        # Return only display names (Spanish preferred)
+        return [display_name for display_name, _ in unique_teams]
+    
+    # Fallback to original behavior if normalization fails
     teams = set()
     world_cup_teams = set()
     
@@ -199,6 +211,7 @@ def list_available_teams() -> List[str]:
                 with open(wc_path, 'r', encoding='utf-8') as f:
                     wc_data = json.load(f)
                 wc_teams = wc_data.get('teams', {})
+                # Prefer Spanish names (they are primary keys in ratings file)
                 world_cup_teams.update(wc_teams.keys())
             except Exception:
                 continue
@@ -806,8 +819,14 @@ def players_command(
     Get player statistics for a selected team.
     
     Uses the match_player_defensive_stats script logic.
+    Normalizes team name to handle Spanish/English aliases.
     """
+    # Normalize team name to canonical form for lookup
+    from predicciones.src.utils.team_normalization import normalize_team_name
+    canonical_team = normalize_team_name(team)
+    
     console.print(f"[bold blue]Fetching player stats for: {team}[/bold blue]")
+    console.print(f"[dim]Normalized team name: {canonical_team}[/dim]")
     
     try:
         from predicciones.scripts.match_player_defensive_stats import (
@@ -815,9 +834,9 @@ def players_command(
             compute_player_stats,
         )
         
-        # Fetch team data
+        # Fetch team data using normalized team name
         console.print("[dim]Fetching team data...[/dim]")
-        team_data = fetch_team_players(team, max_matches=max_matches)
+        team_data = fetch_team_players(canonical_team, max_matches=max_matches)
         
         if not team_data:
             console.print(f"[yellow]No data found for team: {team}[/yellow]")
