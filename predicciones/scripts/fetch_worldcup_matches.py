@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.espn_client import EspnWorldCupClient
+from predicciones.src.data.espn_client import EspnWorldCupClient
 
 logger = logging.getLogger(__name__)
 

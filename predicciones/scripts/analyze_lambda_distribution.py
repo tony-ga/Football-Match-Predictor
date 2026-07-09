@@ -30,9 +30,9 @@ import pandas as pd
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.models.dixon_coles import DixonColesModel
-from src.features.team_features import extract_team_features
-from src.ingestion.schemas import TeamData
+from predicciones.src.models.dixon_coles import DixonColesModel
+from predicciones.src.features.team_features import extract_team_features
+from predicciones.src.ingestion.schemas import TeamData
 
 logging.basicConfig(
     level=logging.INFO,

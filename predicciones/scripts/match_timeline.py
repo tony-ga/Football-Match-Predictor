@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.espn_match_events import (
+from predicciones.src.data.espn_match_events import (
     get_match_event_timeline,
     filter_events_by_type,
     EventSource,

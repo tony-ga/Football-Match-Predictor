@@ -31,8 +31,8 @@ import pandas as pd
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.models.dixon_coles import DixonColesModel
-from src.eval.probability_calibration import (
+from predicciones.src.models.dixon_coles import DixonColesModel
+from predicciones.src.eval.probability_calibration import (
     compute_match_probabilities,
     compute_brier_score,
     compute_log_loss,
@@ -40,7 +40,7 @@ from src.eval.probability_calibration import (
     compute_reliability_curve,
     compute_ece,
 )
-from src.features.markov_features import (
+from predicciones.src.features.markov_features import (
     load_markov_tables,
     build_state_from_match_context,
 )

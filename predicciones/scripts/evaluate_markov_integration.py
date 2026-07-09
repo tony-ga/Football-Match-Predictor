@@ -30,8 +30,8 @@ import pandas as pd
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.models.dixon_coles import DixonColesModel
-from src.features.markov_features import (
+from predicciones.src.models.dixon_coles import DixonColesModel
+from predicciones.src.features.markov_features import (
     load_markov_tables,
     get_markov_features,
     build_state_from_match_context,

@@ -26,7 +26,7 @@ import pandas as pd
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.data.api_client import FootballAPIClient
+from predicciones.src.data.api_client import FootballAPIClient
 
 logging.basicConfig(
     level=logging.INFO,

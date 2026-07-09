@@ -26,10 +26,10 @@ import pandas as pd
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.models.dixon_coles import DixonColesModel
-from src.eval.probability_calibration import compute_match_probabilities
-from src.features.markov_features import build_state_from_match_context
-from src.data.team_ratings_loader import TeamRatingsLoader
+from predicciones.src.models.dixon_coles import DixonColesModel
+from predicciones.src.eval.probability_calibration import compute_match_probabilities
+from predicciones.src.features.markov_features import build_state_from_match_context
+from predicciones.src.data.team_ratings_loader import TeamRatingsLoader
 
 logging.basicConfig(
     level=logging.INFO,

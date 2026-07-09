@@ -26,13 +26,13 @@ from typing import Any, Dict, Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.espn_match_predictor import (
+from predicciones.src.data.espn_match_predictor import (
     build_match_probability_report,
     fetch_match_summary,
     print_match_probability_report,
     save_report,
 )
-from src.domain.exceptions import EspnApiError
+from predicciones.src.domain.exceptions import EspnApiError
 
 logger = logging.getLogger(__name__)
 

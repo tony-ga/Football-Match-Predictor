@@ -22,15 +22,15 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.espn_client import EspnWorldCupClient
-from src.data.cache_manager import EspnCacheManager
-from src.data.espn_stats_parsers import (
+from predicciones.src.data.espn_client import EspnWorldCupClient
+from predicciones.src.data.cache_manager import EspnCacheManager
+from predicciones.src.data.espn_stats_parsers import (
     extract_team_stats_from_summary,
     extract_player_stats_from_summary,
     extract_events_from_summary,
     parse_commentary_events_with_stats,
 )
-from src.utils.config_paths import DERIVED_DIR, ESPN_CACHE_DIR, PROJECT_ROOT
+from predicciones.src.utils.config_paths import DERIVED_DIR, ESPN_CACHE_DIR, PROJECT_ROOT
 
 logging.basicConfig(
     level=logging.INFO,
