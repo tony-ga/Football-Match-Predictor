@@ -38,7 +38,7 @@ class InteractiveMenu:
             "Select an option:\n\n"
             "  [cyan]1.[/cyan] Predict (from fixture file)\n"
             "  [cyan]2.[/cyan] Run Daily Pipeline\n"
-            "  [cyan]3.[/cyan] Build Automatic Parlays\n"
+            "  [cyan]3.[/cyan] Same Game Parlay Builder\n"
             "  [cyan]4.[/cyan] Player Statistics\n"
             "  [cyan]5.[/cyan] Match Timeline\n"
             "  [cyan]6.[/cyan] View Fixtures\n"

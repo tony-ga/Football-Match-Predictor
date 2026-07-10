@@ -22,6 +22,64 @@ from ..ingestion.jsonl_loader import TeamMatchStatsLoader, PlayerMatchStatsLoade
 logger = logging.getLogger(__name__)
 
 
+def _fetch_match_sportsbook_odds(
+    espn_client: EspnWorldCupClient,
+    home_team: str,
+    away_team: str,
+    match_date: str,
+) -> Dict[str, Any]:
+    """
+    Try to fetch sportsbook odds for the target match from ESPN scoreboard data.
+
+    Current real coverage:
+    - 1X2 odds from ESPN when present
+
+    Future-ready placeholders:
+    - double_chance
+    - over_under
+    - btts
+    """
+    default_payload = {
+        "source": "espn_scoreboard",
+        "matched_event": False,
+        "1x2": {"home": None, "draw": None, "away": None},
+        "double_chance": {},
+        "over_under": {},
+        "btts": {},
+        "notes": [],
+    }
+
+    try:
+        scoreboard_date = datetime.strptime(match_date, "%Y-%m-%d").strftime("%Y%m%d")
+    except ValueError:
+        default_payload["notes"].append("Could not normalize match_date for sportsbook lookup.")
+        return default_payload
+
+    try:
+        matches = espn_client.get_world_cup_matches(dates=scoreboard_date, limit=500)
+    except Exception as exc:
+        default_payload["notes"].append(f"Sportsbook lookup failed: {exc}")
+        return default_payload
+
+    normalized_home = espn_client.normalize_team_name(home_team)
+    normalized_away = espn_client.normalize_team_name(away_team)
+
+    for match in matches:
+        if (
+            match.get("home_team") == normalized_home
+            and match.get("away_team") == normalized_away
+        ):
+            payload = dict(default_payload)
+            payload["matched_event"] = True
+            payload["1x2"] = match.get("odds") or default_payload["1x2"]
+            if not any(payload["1x2"].values()):
+                payload["notes"].append("Matched ESPN event, but no 1X2 odds were available.")
+            return payload
+
+    default_payload["notes"].append("No matching ESPN event found for sportsbook odds.")
+    return default_payload
+
+
 def _compute_form_factor(recent_form: Dict[str, Any]) -> float:
     """
     Deriva form_factor de los últimos 3-5 partidos ESPN.
@@ -578,6 +636,13 @@ def predict_match_pipeline(
                 "player_props": {"available": False, "reason": str(e)},
             }
 
+    sportsbook_odds = _fetch_match_sportsbook_odds(
+        espn_client=espn_client,
+        home_team=home_team,
+        away_team=away_team,
+        match_date=match_date,
+    )
+
     # Determine overall data source
     all_warnings = home_profile.data_warnings + away_profile.data_warnings
     if "espn_world_cup" in home_profile.data_source or "espn_world_cup" in away_profile.data_source:
@@ -594,6 +659,7 @@ def predict_match_pipeline(
     response = {
         "match": f"{home_team} vs {away_team}",
         "predictions": final_markets,
+        "sportsbook_odds": sportsbook_odds,
         "markets": alternative_markets,  # Alternative markets block
         "team_context": {
             "home": {

@@ -1,6 +1,6 @@
 
 """
-Test the automatic parlay builder
+Test the Same Game Parlay Builder
 """
 import sys
 from pathlib import Path
@@ -10,10 +10,12 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from predicciones.src.models.parlay_builder import (
-    build_all_parlays,
-    render_parlay
+    build_all_same_game_parlays,
+    render_same_game_parlay_report,
+    check_calibration
 )
 from predicciones.src.pipeline.predict import predict_match_pipeline
+from predicciones.src.cli.commands import list_available_fixtures
 from rich.console import Console
 import pandas as pd
 import logging
@@ -26,49 +28,37 @@ logging.getLogger("predicciones.src.models.calibration").setLevel(logging.ERROR)
 
 console = Console()
 
+
 def main():
+    console.print("\n[bold green]Testing Same Game Parlay Builder[/bold green]\n")
+    
     # Step 1: Load available fixtures
-    from predicciones.src.cli.commands import list_available_fixtures
     fixtures = list_available_fixtures()
     if not fixtures:
         console.print("[red]No fixtures available![/red]")
         return
-
-    # Step 2: Generate predictions for all fixtures
-    match_predictions = []
-    for fixture in fixtures:
-        try:
-            fixture_path = fixture['path']
-            df = pd.read_csv(fixture_path)
-            if len(df) == 0:
-                continue
-
-            for _, match in df.iterrows():
-                home_team = match['home_team']
-                away_team = match['away_team']
-                console.print(f"[dim]Predicting {home_team} vs {away_team}...[/dim]")
-                pred = predict_match_pipeline(
-                    home_team,
-                    away_team,
-                    include_markets=False
-                )
-                match_predictions.append(pred)
-        except Exception as e:
-            console.print(f"[yellow]Skipping fixture {fixture['date']}: {str(e)}[/yellow]")
-
-    if not match_predictions:
-        console.print("[red]No valid match predictions available to build parlays![/red]")
-        return
-
-    # Step 3: Build and render all parlays
-    parlays, calib_status = build_all_parlays(match_predictions)
-    
-    # Show calibration status once
-    if calib_status.get_warning():
-        console.print(f"\n[yellow]{calib_status.get_warning()}[/yellow]\n")
         
-    for parlay_result in parlays:
-        render_parlay(parlay_result, console)
+    # Use the first match from the first fixture
+    fixture_path = fixtures[0]['path']
+    df = pd.read_csv(fixture_path)
+    if len(df) == 0:
+        console.print("[red]No matches in the first fixture![/red]")
+        return
+        
+    home_team = df.iloc[0]['home_team']
+    away_team = df.iloc[0]['away_team']
+    
+    # Step 2: Generate prediction for this match
+    console.print(f"[dim]Predicting {home_team} vs {away_team}...[/dim]\n")
+    pred = predict_match_pipeline(home_team, away_team, include_markets=False)
+    
+    # Step 3: Build same game parlays
+    calib_status = check_calibration()
+    parlays, _ = build_all_same_game_parlays(pred, home_team, away_team, calib_status)
+    
+    # Step 4: Render report
+    render_same_game_parlay_report(parlays, pred, home_team, away_team, calib_status, console)
+
 
 if __name__ == "__main__":
     main()
