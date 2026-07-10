@@ -24,6 +24,8 @@ from .ticket_structure import (
     TicketStructureEvaluation,
     evaluate_ticket_structure,
 )
+from .market_catalog import build_market_catalog, RiskProfile, MarketDefinition, MarketFamily
+from .market_derivation import derive_goal_markets, derive_corner_markets, derive_player_shot_markets
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +61,21 @@ class PickCandidate:
     match_id: str
     home_team: str
     away_team: str
-    market_type: MarketType
+    market_type: Any  # Kept for backward compat, will be string or Enum
     market_name: str
     model_probability: float
     confidence_score: float
     final_score: float
     rationale: str
+    market_key: str = ""
+    interpretation: str = ""
+    risk_fit: List[RiskProfile] = field(default_factory=list) if 'field' in globals() else None
     is_calibrated: bool = False
     market_evaluation: Optional[EvaluatedMarket] = None
+
+    def __post_init__(self):
+        if self.risk_fit is None:
+            self.risk_fit = []
 
 
 @dataclass
@@ -206,7 +215,9 @@ def compute_real_confidence(
     return np.clip(confidence, 0.0, 1.0), rationale
 
 
-def _market_key_from_type(market_type: MarketType) -> str:
+def _market_key_from_type(market_type: Any) -> str:
+    if isinstance(market_type, str):
+        return market_type.replace(".", "_")
     return market_type.value.replace(".", "_")
 
 
@@ -247,59 +258,62 @@ def generate_same_game_candidates(
     away_team: str,
     calib_status: CalibrationStatus
 ) -> List[PickCandidate]:
-    """Generate candidate picks using model confidence plus phase-1 market selectivity."""
+    """Generate candidate picks using the market catalog and derivation logic."""
     candidates = []
     match_id = f"{home_team}_{away_team}"
     match_name = f"{home_team} vs {away_team}"
 
-    markets = pred_data['predictions']
-
-    market_configs = [
-        (MarketType.ONE_X_TWO_HOME, f"{home_team} win", markets['1x2']['home']),
-        (MarketType.ONE_X_TWO_DRAW, "Draw", markets['1x2']['draw']),
-        (MarketType.ONE_X_TWO_AWAY, f"{away_team} win", markets['1x2']['away']),
-        (MarketType.DOUBLE_CHANCE_HOME_OR_DRAW, f"{home_team} or Draw", markets['double_chance']['home_or_draw']),
-        (MarketType.DOUBLE_CHANCE_AWAY_OR_DRAW, f"{away_team} or Draw", markets['double_chance']['away_or_draw']),
-        (MarketType.OVER_2_5, "Over 2.5 goals", markets['over_under']['over_2_5']),
-        (MarketType.OVER_3_5, "Over 3.5 goals", markets['over_under']['over_3_5']),
-        (MarketType.UNDER_2_5, "Under 2.5 goals", markets['over_under']['under_2_5']),
-        (MarketType.UNDER_3_5, "Under 3.5 goals", markets['over_under']['under_3_5']),
-        (MarketType.BTTS_YES, "BTTS: Yes", markets['btts']['yes']),
-        (MarketType.BTTS_NO, "BTTS: No", markets['btts']['no']),
-    ]
+    catalog = build_market_catalog()
+    
+    # Run derivations
+    derived_markets = []
+    derived_markets.extend(derive_goal_markets(pred_data))
+    derived_markets.extend(derive_corner_markets(pred_data))
+    derived_markets.extend(derive_player_shot_markets(pred_data))
 
     confidence_map: Dict[str, float] = {}
     confidence_rationales: Dict[str, str] = {}
-    for market_type, _market_name, prob in market_configs:
-        if prob < 0.25:
-            continue
-        conf, conf_rationale = compute_real_confidence(pred_data, market_type, prob, calib_status)
-        confidence_map[_market_key_from_type(market_type)] = conf
-        confidence_rationales[_market_key_from_type(market_type)] = conf_rationale
-
+    
+    # We still use evaluate_core_market_set, which expects specific nested predictions.
+    # To not break it completely, we'll let it evaluate what it can (mainly goals).
     evaluations = evaluate_core_market_set(
         match_name=match_name,
         home_team=home_team,
         away_team=away_team,
-        predictions=markets,
+        predictions=pred_data.get('predictions', {}),
         sportsbook_odds=pred_data.get("sportsbook_odds"),
-        confidence_scores=confidence_map,
+        confidence_scores={},  # We skip pre-calculating for now to simplify
         filter_config=_base_market_filter_config(),
     )
     pred_data["market_evaluations"] = evaluations
     evaluation_by_key = {item.market_key: item for item in evaluations}
 
-    for market_type, market_name, prob in market_configs:
-        if prob < 0.3:
+    for derived in derived_markets:
+        prob = derived["probability"]
+        if prob < 0.25:
             continue
-
-        market_key = _market_key_from_type(market_type)
-        conf = confidence_map.get(market_key)
-        if conf is None:
-            conf, conf_rationale = compute_real_confidence(pred_data, market_type, prob, calib_status)
-            confidence_rationales[market_key] = conf_rationale
-        conf_rationale = confidence_rationales.get(market_key, "")
-
+            
+        market_key = derived["market_key"]
+        template_key = derived.get("template_key", market_key)
+        
+        # Match with catalog
+        definition = catalog.get(template_key)
+        if not definition:
+            continue
+            
+        market_name = derived.get("name_override", definition.name)
+        
+        # Calculate a pseudo-confidence for now (can be refined per family)
+        conf = prob
+        conf_rationale = f"Model probability: {prob:.1%}."
+        
+        if "double_chance" in market_key:
+            conf += 0.05
+        if not calib_status.is_calibrated:
+            conf *= 0.85
+            
+        conf = np.clip(conf, 0.0, 1.0)
+        
         evaluation = evaluation_by_key.get(market_key)
         if evaluation and evaluation.status == MarketSelectionStatus.DISCARDED:
             continue
@@ -308,12 +322,15 @@ def generate_same_game_candidates(
             match_id=match_id,
             home_team=home_team,
             away_team=away_team,
-            market_type=market_type,
+            market_type=market_key,  # use string key
             market_name=market_name,
             model_probability=prob,
             confidence_score=conf,
             final_score=(prob * conf) + _selectivity_adjustment(evaluation),
             rationale=conf_rationale,
+            market_key=market_key,
+            interpretation=definition.interpretation,
+            risk_fit=definition.risk_fit,
             is_calibrated=calib_status.is_calibrated,
             market_evaluation=evaluation,
         ))
@@ -417,55 +434,23 @@ def generate_game_script_explanation(
     risk_level: RiskLevel,
     pred_data: Dict[str, Any],
 ) -> str:
-    """Generate a detailed explanation of the game script for the parlay"""
+    """Generate a detailed explanation of the game script for the parlay using market interpretations."""
     if not parlay:
         return "No valid picks."
         
-    home_team = parlay[0].home_team
-    away_team = parlay[0].away_team
-    
-    # Build a narrative
     parts = []
     for pick in parlay:
-        if "win" in pick.market_name or "Draw" in pick.market_name:
-            if "double_chance" in pick.market_type.value:
-                if "home" in pick.market_type.value:
-                    parts.append(f"Result protection for {home_team}, avoiding a loss")
-                else:
-                    parts.append(f"Result protection for {away_team}, avoiding a loss")
-            else:
-                parts.append(f"Result pick: {pick.market_name.lower()}")
-        elif "BTTS" in pick.market_name:
-            if "Yes" in pick.market_name:
-                parts.append("Distribution pick: both teams expected to score")
-            else:
-                parts.append("Distribution pick: at least one team expected to keep a clean sheet")
-        else:
-            parts.append(f"Total goals pick: {pick.market_name.lower()}")
+        interp = pick.interpretation if hasattr(pick, 'interpretation') and pick.interpretation else pick.market_name
+        parts.append(f"- {pick.market_name}: {interp}")
             
-    # Combine into a coherent explanation
     risk_prefix = {
-        RiskLevel.LOW: "Conservative script: ",
-        RiskLevel.MEDIUM: "Moderate conviction script: ",
-        RiskLevel.HIGH: "Aggressive, specific script: ",
+        RiskLevel.LOW: "Low Risk (Wide Script, High Margin of Error):\n",
+        RiskLevel.MEDIUM: "Medium Risk (Balanced Script):\n",
+        RiskLevel.HIGH: "High Risk (Narrow Script, Specific Outcomes):\n",
     }[risk_level]
     
-    narrative = risk_prefix
-    
-    if len(parts) == 1:
-        narrative += parts[0]
-    elif len(parts) == 2:
-        narrative += f"{parts[0]} while {parts[1].lower()}"
-    else:
-        narrative += ", ".join(p.lower() for p in parts[:-1]) + f", and {parts[-1].lower()}"
-        
-    # Add a closing sentence
-    closing = (
-        "This combination avoids redundant markets and builds a "
-        f"{'conservative' if risk_level == RiskLevel.LOW else 'specific' if risk_level == RiskLevel.HIGH else 'balanced'} "
-        "narrative about how the match might play out."
-    )
-    return narrative + ". " + closing
+    narrative = risk_prefix + "\n".join(parts)
+    return narrative
 
 
 def build_all_same_game_parlays(
@@ -480,11 +465,11 @@ def build_all_same_game_parlays(
     if not candidates:
         return [], calib_status
         
-    # Define leg counts per risk level
+    # Define leg counts per risk level (as per user request)
     risk_leg_counts = {
-        RiskLevel.LOW: [2],
-        RiskLevel.MEDIUM: [2, 3],
-        RiskLevel.HIGH: [3, 4],
+        RiskLevel.LOW: [2, 3],
+        RiskLevel.MEDIUM: [2, 3, 4],
+        RiskLevel.HIGH: [3, 4, 5],
     }
     
     results = []
@@ -494,13 +479,20 @@ def build_all_same_game_parlays(
         best_score = 0.0
         best_structure = None
         
+        # Filter candidates by risk compatibility based on margin of error
+        mapped_risk = RiskProfile[risk_level.name]
+        valid_candidates = [c for c in candidates if mapped_risk in c.risk_fit]
+        
+        if not valid_candidates:
+            continue
+        
         # Try all possible leg counts for this risk level
         for num_legs in risk_leg_counts[risk_level]:
-            if num_legs > len(candidates):
+            if num_legs > len(valid_candidates):
                 continue
                 
-            # Generate all possible combinations (use top N candidates to limit search space)
-            top_candidates = candidates[:12]  # Keep it manageable
+            # Limit search space to top N valid candidates
+            top_candidates = valid_candidates[:12]
             for parlay_tuple in combinations(top_candidates, num_legs):
                 parlay = list(parlay_tuple)
                     

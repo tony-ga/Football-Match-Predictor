@@ -78,6 +78,10 @@ def _market_family(market_key: str) -> str:
         return "totals"
     if market_key.startswith("btts_"):
         return "btts"
+    if market_key.startswith("corners_"):
+        return "corners"
+    if market_key.startswith("player_shots_"):
+        return "player_shots"
     return "other"
 
 
@@ -86,6 +90,10 @@ def _parse_total_market(market_key: str) -> Tuple[Optional[str], Optional[float]
         return "over", float(market_key.split("_", 1)[1].replace("_", "."))
     if market_key.startswith("under_"):
         return "under", float(market_key.split("_", 1)[1].replace("_", "."))
+    if market_key.startswith("corners_over_"):
+        return "over", float(market_key.split("corners_over_", 1)[1].replace("_", "."))
+    if market_key.startswith("corners_under_"):
+        return "under", float(market_key.split("corners_under_", 1)[1].replace("_", "."))
     return None, None
 
 
@@ -223,14 +231,34 @@ def classify_market_relation(leg_a: Any, leg_b: Any) -> PairRelation:
             return PairRelation(ordered_a, ordered_b, MarketRelationType.CONTRADICTORY, 1.0, "BTTS Yes cannot coexist with Under 1.5.")
 
     if total_side_a and total_side_b and total_side_a == total_side_b:
-        strength = _nested_totals_strength(total_side_a, total_line_a, total_line_b)
-        return PairRelation(
-            ordered_a,
-            ordered_b,
-            MarketRelationType.NESTED_REDUNDANT,
-            strength,
-            "Both legs belong to the same totals chain and overlap heavily.",
-        )
+        # Check if they belong to the same family before declaring nested redundancy
+        # to avoid marking goals over 1.5 and corners over 7.5 as nested!
+        if _market_family(market_a) == _market_family(market_b):
+            strength = _nested_totals_strength(total_side_a, total_line_a, total_line_b)
+            return PairRelation(
+                ordered_a,
+                ordered_b,
+                MarketRelationType.NESTED_REDUNDANT,
+                strength,
+                "Both legs belong to the same totals chain and overlap heavily.",
+            )
+
+    # Nested player shots
+    if market_a.startswith("player_shots_over_") and market_b.startswith("player_shots_over_"):
+        # Format: player_shots_over_1_5_playername
+        parts_a = market_a.split("_")
+        parts_b = market_b.split("_")
+        if len(parts_a) >= 5 and len(parts_b) >= 5:
+            player_a = "_".join(parts_a[4:])
+            player_b = "_".join(parts_b[4:])
+            if player_a == player_b:
+                return PairRelation(
+                    ordered_a,
+                    ordered_b,
+                    MarketRelationType.NESTED_REDUNDANT,
+                    0.85,
+                    "Both legs are over shots for the same player.",
+                )
 
     if single_a and dc_b and single_a in dc_b:
         return PairRelation(ordered_a, ordered_b, MarketRelationType.NESTED_REDUNDANT, 0.90, "Double chance partially contains the 1X2 outcome.")
@@ -238,16 +266,17 @@ def classify_market_relation(leg_a: Any, leg_b: Any) -> PairRelation:
         return PairRelation(ordered_a, ordered_b, MarketRelationType.NESTED_REDUNDANT, 0.90, "Double chance partially contains the 1X2 outcome.")
 
     if total_side_a and total_side_b and total_side_a != total_side_b:
-        lower = min(total_line_a, total_line_b)
-        upper = max(total_line_a, total_line_b)
-        if (upper - lower) >= 2.0:
-            return PairRelation(
-                ordered_a,
-                ordered_b,
-                MarketRelationType.WEAK_LOW_INFORMATION,
-                0.70,
-                "The total-goals corridor is too wide and adds little script specificity.",
-            )
+        if _market_family(market_a) == _market_family(market_b):
+            lower = min(total_line_a, total_line_b)
+            upper = max(total_line_a, total_line_b)
+            if (upper - lower) >= 2.0:
+                return PairRelation(
+                    ordered_a,
+                    ordered_b,
+                    MarketRelationType.WEAK_LOW_INFORMATION,
+                    0.70,
+                    "The total-goals corridor is too wide and adds little script specificity.",
+                )
 
     weak_pairs = {
         frozenset({"over_1_5", "btts_yes"}): ("Over 1.5 adds little beyond BTTS Yes in many scripts.", 0.45),

@@ -418,3 +418,149 @@ def derive_all_markets(
         f"xG=({lambda_home:.2f}, {lambda_away:.2f})"
     )
     return markets
+
+# ---------------------------------------------------------------------------
+# SGP Builder Market Extraction & Derivation
+# ---------------------------------------------------------------------------
+
+def derive_goal_markets(pred_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Extract probabilities for goal/result/totals/BTTS markets from poisson/lambda data.
+    Returns a list of dicts: {"market_key": str, "probability": float}
+    """
+    markets = pred_data.get('predictions', {})
+    if not markets:
+        return []
+
+    candidates = []
+    
+    # 1X2
+    if '1x2' in markets:
+        candidates.append({"market_key": "1x2_home", "probability": markets['1x2'].get('home', 0.0)})
+        candidates.append({"market_key": "1x2_draw", "probability": markets['1x2'].get('draw', 0.0)})
+        candidates.append({"market_key": "1x2_away", "probability": markets['1x2'].get('away', 0.0)})
+        
+    # Double Chance
+    if 'double_chance' in markets:
+        candidates.append({"market_key": "double_chance_home_or_draw", "probability": markets['double_chance'].get('home_or_draw', 0.0)})
+        candidates.append({"market_key": "double_chance_away_or_draw", "probability": markets['double_chance'].get('away_or_draw', 0.0)})
+        candidates.append({"market_key": "double_chance_home_or_away", "probability": markets['double_chance'].get('home_or_away', 0.0)})
+
+    # Totals
+    if 'over_under' in markets:
+        ou = markets['over_under']
+        candidates.append({"market_key": "over_1_5", "probability": ou.get('over_1_5', 0.0)})
+        candidates.append({"market_key": "over_2_5", "probability": ou.get('over_2_5', 0.0)})
+        candidates.append({"market_key": "over_3_5", "probability": ou.get('over_3_5', 0.0)})
+        candidates.append({"market_key": "over_4_5", "probability": ou.get('over_4_5', 0.0)})
+        candidates.append({"market_key": "under_1_5", "probability": ou.get('under_1_5', 0.0)})
+        candidates.append({"market_key": "under_2_5", "probability": ou.get('under_2_5', 0.0)})
+        candidates.append({"market_key": "under_3_5", "probability": ou.get('under_3_5', 0.0)})
+        candidates.append({"market_key": "under_4_5", "probability": ou.get('under_4_5', 0.0)})
+
+    # BTTS
+    if 'btts' in markets:
+        candidates.append({"market_key": "btts_yes", "probability": markets['btts'].get('yes', 0.0)})
+        candidates.append({"market_key": "btts_no", "probability": markets['btts'].get('no', 0.0)})
+
+    return candidates
+
+
+def derive_corner_markets(pred_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Derive corner markets based on historical averages and dispersion.
+    Expects pred_data['corners'] to have team averages.
+    If missing or insufficient, returns empty list (graceful degradation).
+    """
+    corner_data = pred_data.get('corners')
+    if not corner_data:
+        return []
+        
+    try:
+        home_for = corner_data['home_avg_for']
+        home_against = corner_data['home_avg_against']
+        away_for = corner_data['away_avg_for']
+        away_against = corner_data['away_avg_against']
+    except KeyError:
+        return []
+        
+    expected_home_corners = (home_for + away_against) / 2
+    expected_away_corners = (away_for + home_against) / 2
+    expected_total = expected_home_corners + expected_away_corners
+    
+    import scipy.stats as stats
+    std_dev = corner_data.get('total_std_dev', expected_total ** 0.5)
+    
+    candidates = []
+    
+    def get_over_prob(line: float) -> float:
+        return 1.0 - stats.norm.cdf(line, loc=expected_total, scale=std_dev)
+        
+    def get_under_prob(line: float) -> float:
+        return stats.norm.cdf(line, loc=expected_total, scale=std_dev)
+        
+    candidates.append({"market_key": "corners_over_6_5", "probability": get_over_prob(6.5)})
+    candidates.append({"market_key": "corners_over_7_5", "probability": get_over_prob(7.5)})
+    candidates.append({"market_key": "corners_over_8_5", "probability": get_over_prob(8.5)})
+    candidates.append({"market_key": "corners_over_9_5", "probability": get_over_prob(9.5)})
+    
+    candidates.append({"market_key": "corners_under_10_5", "probability": get_under_prob(10.5)})
+    candidates.append({"market_key": "corners_under_8_5", "probability": get_under_prob(8.5)})
+    
+    return candidates
+
+
+def derive_player_shot_markets(pred_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Derive player shot markets based on individual stats.
+    Expects pred_data['player_stats'] as a list of players.
+    If missing, returns empty list.
+    """
+    player_data = pred_data.get('player_stats')
+    if not player_data:
+        return []
+        
+    import scipy.stats as stats
+    candidates = []
+    
+    for player in player_data:
+        name = player.get('name')
+        shots_p90 = player.get('shots_p90')
+        exp_mins = player.get('expected_minutes', 90)
+        
+        if not name or not shots_p90:
+            continue
+            
+        expected_shots = shots_p90 * (exp_mins / 90.0)
+        std_dev = player.get('shots_std_dev', max(1.0, expected_shots ** 0.5))
+        
+        safe_name = name.lower().replace(" ", "_")
+        
+        prob_over_1_5 = 1.0 - stats.norm.cdf(1.5, loc=expected_shots, scale=std_dev)
+        if prob_over_1_5 >= 0.2:
+            candidates.append({
+                "market_key": f"player_shots_over_1_5_{safe_name}",
+                "template_key": "player_shots_over_1_5", 
+                "name_override": f"{name} Over 1.5 Shots",
+                "probability": float(prob_over_1_5)
+            })
+            
+        prob_over_2_5 = 1.0 - stats.norm.cdf(2.5, loc=expected_shots, scale=std_dev)
+        if prob_over_2_5 >= 0.2:
+            candidates.append({
+                "market_key": f"player_shots_over_2_5_{safe_name}",
+                "template_key": "player_shots_over_2_5",
+                "name_override": f"{name} Over 2.5 Shots",
+                "probability": float(prob_over_2_5)
+            })
+            
+        prob_over_3_5 = 1.0 - stats.norm.cdf(3.5, loc=expected_shots, scale=std_dev)
+        if prob_over_3_5 >= 0.2:
+            candidates.append({
+                "market_key": f"player_shots_over_3_5_{safe_name}",
+                "template_key": "player_shots_over_3_5",
+                "name_override": f"{name} Over 3.5 Shots",
+                "probability": float(prob_over_3_5)
+            })
+            
+    return candidates
