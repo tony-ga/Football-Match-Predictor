@@ -280,66 +280,10 @@ class InteractiveMenu:
         players_command(team, max_matches, output_format)
     
     def _timelines_menu(self) -> None:
-        """Match timeline menu with guided selection from available timelines."""
-        self.console.print("\n[bold]Match Timeline[/bold]")
-        
-        # Import helper
-        from predicciones.src.cli.commands import list_available_timelines
-        
-        # Get available timelines
-        timelines = list_available_timelines()
-        
-        if timelines:
-            self.console.print(f"\n[green]✓ Found {len(timelines)} matches with timeline data:[/green]")
-            
-            table = Table(title="Available Matches with Timeline Data", show_header=True, header_style="bold magenta")
-            table.add_column("#", justify="right", style="cyan")
-            table.add_column("Match ID", style="white")
-            table.add_column("Fixture", style="yellow")
-            table.add_column("Date", style="dim")
-            table.add_column("Competition", style="dim")
-            table.add_column("Events", justify="right")
-            
-            for idx, tl in enumerate(timelines, 1):
-                table.add_row(
-                    str(idx),
-                    str(tl.get('match_id', 'N/A')),
-                    tl.get('fixture', 'Unknown'),
-                    tl.get('date', 'N/A')[:10] if tl.get('date') else 'N/A',
-                    tl.get('competition', 'N/A')[:20],
-                    str(tl.get('events', 0)),
-                )
-            
-            self.console.print(table)
-            
-            choice = Prompt.ask(
-                f"\n[cyan]Select match (1-{len(timelines)}) or enter manual match_id[/cyan]"
-            )
-            
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(timelines):
-                    match_id = timelines[idx]['match_id']
-                    self.console.print(f"\n[dim]Selected: {timelines[idx]['fixture']}[/dim]")
-                else:
-                    match_id = choice
-            except ValueError:
-                match_id = choice
-        else:
-            self.console.print("\n[yellow]No timeline data found in output directories.[/yellow]")
-            self.console.print("[dim]Timeline data is generated when processing matches.[/dim]")
-            match_id = Prompt.ask(
-                "[cyan]Enter match ID manually[/cyan]"
-            )
-        
-        output_dir = Prompt.ask(
-            "[cyan]Output directory[/cyan]",
-            default="output/timelines"
-        )
-        
-        # Import and run command
-        from predicciones.src.cli.commands import timelines_command
-        timelines_command(match_id, output_dir)
+        """Match timeline menu with guided team and match selection."""
+        from predicciones.src.cli.match_timeline import run_match_timeline_menu
+
+        run_match_timeline_menu(self.console)
     
     def _fixtures_menu(self) -> None:
         """Fixtures menu with date selection from available data."""

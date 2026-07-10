@@ -128,10 +128,10 @@ def players_cli(
 
 @app.command("timelines")
 def timelines_cli(
-    match_id: str = typer.Option(..., "--match-id", "-m", help="Match ID or fixture"),
+    match_id: str = typer.Option(None, "--match-id", "-m", help="Internal match ID for legacy direct lookup. Omit for guided menu."),
     output_dir: str = typer.Option("output/timelines", "--output-dir", "-o", help="Output directory"),
 ):
-    """Get timeline data for past matches."""
+    """Browse match timelines with guided team and match selection."""
     timelines_command(match_id, output_dir)
 
 

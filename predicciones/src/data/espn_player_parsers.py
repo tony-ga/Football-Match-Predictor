@@ -159,7 +159,7 @@ def _parse_roster_player(
         position = str(position_raw) if position_raw else ""
     
     # Jersey number
-    jersey = player_block.get("jersey") or athlete.get("jersey")
+    jersey = player_block.get("jersey") or athlete.get("jersey") or ""
     if jersey:
         jersey = str(jersey)
     
@@ -507,6 +507,16 @@ def build_player_match_rows(summary: dict) -> list[dict]:
     roster_players = extract_roster_players(summary)
     signals = extract_player_signals(summary)
     events = extract_player_events(summary)
+    stats_by_player: Dict[str, dict] = {}
+    try:
+        from .espn_stats_parsers import extract_player_stats_from_summary
+
+        for stat_row in extract_player_stats_from_summary(summary):
+            player_id = stat_row.get("player_id")
+            if player_id:
+                stats_by_player[str(player_id)] = stat_row
+    except Exception as exc:
+        logger.debug("Could not extract roster player stats: %s", exc)
     
     # Index signals and events by athlete_id
     signals_by_player: Dict[str, list] = {}
@@ -543,12 +553,17 @@ def build_player_match_rows(summary: dict) -> list[dict]:
         is_key_attacker = is_goal_leader or is_shot_leader
         has_offensive_signal = is_key_attacker or any(s.get("signal_type") == "playmaker" for s in player_signals)
         
-        # Aggregate events
-        goals = sum(1 for e in player_events if e["event_type"] == "goal")
+        # Aggregate stats first; keyEvents are only a fallback to avoid inflation.
+        stat_row = stats_by_player.get(aid, {})
+        event_goals = sum(1 for e in player_events if e["event_type"] == "goal")
         own_goals = sum(1 for e in player_events if e["event_type"] == "own_goal")
-        yellow_cards = sum(1 for e in player_events if e["event_type"] == "yellow_card")
-        red_cards = sum(1 for e in player_events if e["event_type"] == "red_card")
-        assists = sum(1 for e in player_events if e["event_type"] == "assist")
+        event_yellow_cards = sum(1 for e in player_events if e["event_type"] == "yellow_card")
+        event_red_cards = sum(1 for e in player_events if e["event_type"] == "red_card")
+        event_assists = sum(1 for e in player_events if e["event_type"] == "assist")
+        goals = stat_row.get("goals") if stat_row.get("goals") is not None else event_goals
+        yellow_cards = stat_row.get("yellow_cards") if stat_row.get("yellow_cards") is not None else event_yellow_cards
+        red_cards = stat_row.get("red_cards") if stat_row.get("red_cards") is not None else event_red_cards
+        assists = stat_row.get("assists") if stat_row.get("assists") is not None else event_assists
         was_substituted = any(e["event_type"] == "substitution" for e in player_events)
         
         rows.append({
@@ -607,7 +622,7 @@ def build_player_match_rows(summary: dict) -> list[dict]:
         is_key_attacker = is_goal_leader or is_shot_leader
         has_offensive_signal = is_key_attacker or any(s.get("signal_type") == "playmaker" for s in player_signals)
         
-        # Aggregate events
+        # Aggregate events; there is no roster stat row for these players.
         goals = sum(1 for e in player_events if e["event_type"] == "goal")
         own_goals = sum(1 for e in player_events if e["event_type"] == "own_goal")
         yellow_cards = sum(1 for e in player_events if e["event_type"] == "yellow_card")

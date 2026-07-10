@@ -1,3 +1,0 @@
-date,league,home_team,away_team,lambda_home_base,lambda_away_base,lambda_home_markov,lambda_away_markov,p_home_win_markov,p_draw_markov,p_away_win_markov,p_over_2_5_markov,p_btts_yes_markov,delta_lambda_total,markov_weight_used
-2026-07-20,FIFA World Cup,Argentina,Brasil,2.9196,0.8722,2.9363,0.8772,0.7822,0.1431,0.0747,0.7324,0.5604,0.021700000000000497,"piecewise: early=0.20, mid=0.15, late=0.10"
-2026-07-20,FIFA World Cup,France,England,1.1972,2.028,1.2041,2.0396,0.2085,0.2374,0.5541,0.629,0.6214,0.01849999999999996,"piecewise: early=0.20, mid=0.15, late=0.10"

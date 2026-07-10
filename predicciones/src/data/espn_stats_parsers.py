@@ -378,178 +378,6 @@ def extract_player_stats_from_summary(summary: Dict[str, Any]) -> List[Dict[str,
                     }
                     players.append(player_data)
     
-    # Format 3: Fallback to boxscore structure if no roster data found
-    if not players:
-        boxscore = source.get("boxscore", {})
-        
-        # Format 3a: boxscore.teams[].players
-        teams_data = boxscore.get("teams", [])
-        if isinstance(teams_data, list):
-            for team_block in teams_data:
-                home_away = team_block.get("homeAway", "")
-                team_info = team_block.get("team", {})
-                team_id = str(team_info.get("id", ""))
-                team_name = team_info.get("displayName", "")
-                
-                players_list = team_block.get("players", [])
-                if isinstance(players_list, list):
-                    for p in players_list:
-                        if not isinstance(p, dict):
-                            continue
-                        
-                        athlete = p.get("athlete", {})
-                        if not isinstance(athlete, dict):
-                            athlete = p
-                        
-                        player_id = str(athlete.get("id") or p.get("id") or "")
-                        if not player_id or player_id in seen_ids:
-                            continue
-                        
-                        seen_ids.add(player_id)
-                        
-                        # Parse stats
-                        stats = p.get("stats", [])
-                        parsed_stats = _parse_player_stat_array(stats) if isinstance(stats, list) else {}
-                        
-                        is_starter = p.get("starter", False) or athlete.get("starter", False)
-                        
-                        player_data = {
-                            "player_id": player_id,
-                            "display_name": athlete.get("displayName") or p.get("displayName") or "",
-                            "short_name": athlete.get("shortName") or p.get("shortName") or "",
-                            "position": athlete.get("position", {}).get("abbreviation", "") if isinstance(athlete.get("position"), dict) else str(athlete.get("position", "")),
-                            "team_home_away": home_away,
-                            "is_starter": bool(is_starter),
-                            "minutes": p.get("minutes"),
-                            "goals": parsed_stats.get("goals"),
-                            "assists": parsed_stats.get("assists"),
-                            "shots": parsed_stats.get("shots"),
-                            "shots_on_target": parsed_stats.get("shots_on_target"),
-                            "yellow_cards": parsed_stats.get("yellow_cards"),
-                            "red_cards": parsed_stats.get("red_cards"),
-                            "total_cards": parsed_stats.get("total_cards"),
-                            "fouls": parsed_stats.get("fouls"),
-                            "offsides": parsed_stats.get("offsides"),
-                            "saves": parsed_stats.get("saves"),
-                        }
-                        players.append(player_data)
-    
-    return players or 
-                athlete.get("name") or
-                ""
-            )
-            
-            short_name = p.get("shortName") or athlete.get("shortName", "")
-            position = p.get("position") or athlete.get("position", {})
-            if isinstance(position, dict):
-                position = position.get("abbreviation") or position.get("name") or ""
-            
-            team_home_away = p.get("team", {}).get("homeAway", "")
-            
-            stats = p.get("stats", [])
-            parsed_stats = _parse_player_stat_array(stats)
-            
-            is_starter = p.get("starter", False) or p.get("starterFlag", False)
-            minutes_played = parsed_stats.get("minutes") or p.get("minutes") or 0
-            
-            if not is_starter and minutes_played > 60:
-                is_starter = True
-            
-            player_data = {
-                "player_id": player_id,
-                "display_name": display_name,
-                "short_name": short_name,
-                "position": position,
-                "team_home_away": team_home_away,
-                "is_starter": is_starter,
-                "minutes": minutes_played,
-                "goals": parsed_stats.get("goals"),
-                "assists": parsed_stats.get("assists"),
-                "shots": parsed_stats.get("shots"),
-                "shots_on_target": parsed_stats.get("shots_on_target"),
-                "yellow_cards": parsed_stats.get("yellow_cards"),
-                "red_cards": parsed_stats.get("red_cards"),
-                "total_cards": parsed_stats.get("total_cards"),
-                "fouls": parsed_stats.get("fouls"),
-                "offsides": parsed_stats.get("offsides"),
-                "saves": parsed_stats.get("saves"),
-            }
-            players.append(player_data)
-    
-    # Format 4b: boxscore.teams[].players or boxscore.teams[].roster
-    teams_data = boxscore.get("teams", [])
-    for team_block in teams_data:
-        home_away = team_block.get("homeAway", "")
-        team_info = team_block.get("team", {})
-        team_id = str(team_info.get("id", ""))
-        team_name = team_info.get("displayName", "")
-        
-        # Check roster
-        roster = team_block.get("roster", [])
-        if isinstance(roster, list):
-            for p in roster:
-                if not isinstance(p, dict):
-                    continue
-                player_id = str(p.get("id") or p.get("athlete", {}).get("id") or "")
-                if not player_id or player_id in seen_ids:
-                    continue
-                seen_ids.add(player_id)
-                
-                athlete = p.get("athlete", {})
-                if isinstance(athlete, dict):
-                    player_id = str(athlete.get("id") or player_id)
-                
-                display_name = (
-                    p.get("displayName") or 
-                    athlete.get("displayName") or 
-                    p.get("name") or 
-                    athlete.get("name") or
-                    ""
-                )
-                
-                short_name = p.get("shortName") or athlete.get("shortName", "")
-                position = p.get("position") or athlete.get("position", {})
-                if isinstance(position, dict):
-                    position = position.get("abbreviation") or position.get("name") or ""
-                
-                stats = p.get("stats", [])
-                parsed_stats = _parse_player_stat_array(stats)
-                
-                is_starter = p.get("starter", False) or p.get("starterFlag", False)
-                
-                player_data = {
-                    "player_id": player_id,
-                    "display_name": display_name,
-                    "short_name": short_name,
-                    "position": position,
-                    "team_home_away": home_away,
-                    "is_starter": is_starter,
-                    "minutes": parsed_stats.get("minutes"),
-                    "goals": parsed_stats.get("goals"),
-                    "assists": parsed_stats.get("assists"),
-                    "shots": parsed_stats.get("shots"),
-                    "shots_on_target": parsed_stats.get("shots_on_target"),
-                    "yellow_cards": parsed_stats.get("yellow_cards"),
-                    "red_cards": parsed_stats.get("red_cards"),
-                    "total_cards": parsed_stats.get("total_cards"),
-                    "fouls": parsed_stats.get("fouls"),
-                    "offsides": parsed_stats.get("offsides"),
-                    "saves": parsed_stats.get("saves"),
-                }
-                players.append(player_data)
-        
-        # Check players
-        team_players = team_block.get("players", [])
-        if isinstance(team_players, list):
-            for p in team_players:
-                if not isinstance(p, dict):
-                    continue
-                player_id = str(p.get("id") or p.get("athlete", {}).get("id") or "")
-                if not player_id or player_id in seen_ids:
-                    continue
-                seen_ids.add(player_id)
-                # Similar parsing as above...
-    
     return players
 
 
@@ -738,19 +566,19 @@ def _parse_player_stat_array(stats: List[Any]) -> Dict[str, Optional[float]]:
         else:
             continue
         
-        if "goal" in name and "own" not in name:
+        if name in {"totalgoals", "goals"}:
             result["goals"] = value
-        elif "assist" in name:
+        elif name in {"goalassists", "assists"}:
             result["assists"] = value
         elif "minute" in name or "min" == name:
             result["minutes"] = value
-        elif "shot" in name and "on target" in name:
+        elif name in {"shotsontarget", "shotson goal", "shotsongoal"}:
             result["shots_on_target"] = value
-        elif "shot" in name:
+        elif name in {"totalshots", "shots"}:
             result["shots"] = value
-        elif "yellow" in name and "card" in name:
+        elif name == "yellowcards":
             result["yellow_cards"] = value
-        elif "red" in name and "card" in name:
+        elif name == "redcards":
             result["red_cards"] = value
         elif "card" in name and "total" in name:
             result["total_cards"] = value

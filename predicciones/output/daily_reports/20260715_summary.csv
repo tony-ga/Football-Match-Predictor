@@ -1,5 +1,0 @@
-date,league,home_team,away_team,lambda_home_base,lambda_away_base,lambda_home_markov,lambda_away_markov,p_home_win_markov,p_draw_markov,p_away_win_markov,p_over_2_5_markov,p_btts_yes_markov,delta_lambda_total,markov_weight_used
-2026-07-15,FIFA World Cup,Quarterfinal 3 Winner,Quarterfinal 4 Winner,1.736,1.352,1.7459,1.3597,0.4525,0.2613,0.2862,0.6,0.6274,0.017599999999999838,"piecewise: early=0.20, mid=0.15, late=0.10"
-2026-07-15,UEFA Champions League,Quarterfinal 3 Winner,Quarterfinal 4 Winner,1.736,1.352,1.7459,1.3597,0.4525,0.2613,0.2862,0.6,0.6274,0.017599999999999838,"piecewise: early=0.20, mid=0.15, late=0.10"
-2026-07-15,Premier League,Quarterfinal 3 Winner,Quarterfinal 4 Winner,1.736,1.352,1.7459,1.3597,0.4525,0.2613,0.2862,0.6,0.6274,0.017599999999999838,"piecewise: early=0.20, mid=0.15, late=0.10"
-2026-07-15,La Liga,Quarterfinal 3 Winner,Quarterfinal 4 Winner,1.736,1.352,1.7459,1.3597,0.4525,0.2613,0.2862,0.6,0.6274,0.017599999999999838,"piecewise: early=0.20, mid=0.15, late=0.10"

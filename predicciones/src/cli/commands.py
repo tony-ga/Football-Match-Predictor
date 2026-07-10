@@ -1032,14 +1032,20 @@ def _display_player_stats_json(player_stats: list) -> None:
 
 
 def timelines_command(
-    match_id: str,
+    match_id: Optional[str] = None,
     output_dir: str = "output/timelines",
 ) -> None:
     """
     Get timeline data for past matches.
-    
-    Uses the match_timeline script functionality.
+
+    Without match_id, opens the guided team -> match -> timeline browser.
     """
+    if not match_id:
+        from predicciones.src.cli.match_timeline import run_match_timeline_menu
+
+        run_match_timeline_menu(console)
+        return
+
     console.print(f"[bold blue]Fetching timeline for match: {match_id}[/bold blue]")
     
     try:
