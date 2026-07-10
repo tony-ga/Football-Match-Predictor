@@ -881,9 +881,11 @@ def run_parlay_builder(console: Console) -> None:
         render_same_game_parlay_report,
         check_calibration
     )
+    from predicciones.src.models.calibration import CalibrationManager
     from predicciones.src.pipeline.predict import predict_match_pipeline
     import logging
     from rich.prompt import Prompt
+    from pathlib import Path
     
     # Disable repeated missing calibrator warnings
     logging.getLogger("predicciones.src.pipeline.predict").setLevel(logging.ERROR)
@@ -918,6 +920,83 @@ def run_parlay_builder(console: Console) -> None:
     if not all_matches:
         console.print("[red]No valid matches found in fixtures.[/red]")
         return
+    
+    # Step 2: Let user choose a match
+    console.print(f"\nFound {len(all_matches)} matches across {len(fixtures)} fixtures\n")
+    
+    match_table = Table(title="Available Matches", show_header=True, header_style="bold magenta")
+    match_table.add_column("#", justify="right")
+    match_table.add_column("Home Team")
+    match_table.add_column("Away Team")
+    match_table.add_column("Date")
+    
+    for i, (home, away, date) in enumerate(all_matches, 1):
+        match_table.add_row(str(i), home, away, str(date) if date else "-")
+    
+    console.print(match_table)
+    
+    choice = Prompt.ask(
+        "Enter match number (or 'q' to quit)",
+        choices=[str(i) for i in range(1, len(all_matches) + 1)] + ["q"],
+        default="1"
+    )
+    
+    if choice == "q":
+        return
+    
+    match_idx = int(choice) - 1
+    home_team, away_team, match_date = all_matches[match_idx]
+    
+    # Step 3: Try to load calibrators
+    calib_manager = CalibrationManager()
+    project_root = Path(__file__).parent.parent.parent.parent
+    calib_dir = project_root / "output" / "calibrators"
+    
+    if calib_dir.exists():
+        expected_calibrators = {
+            "1x2": "cal_1x2.pkl",
+            "btts": "cal_btts.pkl",
+            "over_under_15": "cal_ou15.pkl",
+            "over_under_25": "cal_ou25.pkl",
+            "over_under_35": "cal_ou35.pkl",
+        }
+        for market_name, filename in expected_calibrators.items():
+            calib_path = calib_dir / filename
+            if calib_path.exists():
+                try:
+                    from predicciones.src.models.calibration import MarketCalibrator
+                    calib_manager.add_calibrator(
+                        market_name,
+                        MarketCalibrator.load(calib_path)
+                    )
+                    console.print(f"[dim]Loaded calibrator: {market_name}[/dim]")
+                except Exception as e:
+                    console.print(f"[yellow]Failed to load {filename}: {e}[/yellow]")
+    
+    if calib_manager.calibrators:
+        console.print(f"\n[green]✓ Loaded {len(calib_manager.calibrators)} calibrators[/green]")
+    else:
+        console.print("\n[yellow]⚠ No calibrators found – using raw probabilities[/yellow]")
+    
+    # Step 4: Generate prediction for this match
+    console.print(f"\n[dim]Generating predictions for {home_team} vs {away_team}...[/dim]\n")
+    predict_kwargs = {"include_markets": False}
+    if isinstance(match_date, str) and match_date:
+        predict_kwargs["match_date"] = match_date
+    pred = predict_match_pipeline(home_team, away_team, **predict_kwargs)
+    
+    # Step 5: Check calibration status and build parlays
+    calib_status = check_calibration()
+    parlays, _ = build_all_same_game_parlays(
+        pred, 
+        home_team, 
+        away_team, 
+        calib_status,
+        calib_manager=calib_manager if calib_manager.calibrators else None,
+    )
+    
+    # Step 6: Render the full report
+    render_same_game_parlay_report(parlays, pred, home_team, away_team, calib_status, console)
         
     # Step 2: Display match selection menu
     console.print("[bold]Select a match for Same Game Parlay Builder[/bold]\n")
