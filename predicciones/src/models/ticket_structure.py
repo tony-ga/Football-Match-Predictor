@@ -13,6 +13,30 @@ class MarketRelationType(Enum):
     NEUTRAL = "neutral"
 
 
+# Totals nesting hierarchy (strict ordering used for redundancy detection).
+OVER_TOTALS_CHAIN: Tuple[float, ...] = (0.5, 1.5, 2.5, 3.5, 4.5)
+UNDER_TOTALS_CHAIN: Tuple[float, ...] = (4.5, 3.5, 2.5, 1.5)
+
+CORE_PARLAY_MARKETS: Tuple[str, ...] = (
+    "1x2_home",
+    "1x2_draw",
+    "1x2_away",
+    "double_chance_home_or_draw",
+    "double_chance_away_or_draw",
+    "double_chance_home_or_away",
+    "over_1_5",
+    "over_2_5",
+    "over_3_5",
+    "over_4_5",
+    "under_1_5",
+    "under_2_5",
+    "under_3_5",
+    "under_4_5",
+    "btts_yes",
+    "btts_no",
+)
+
+
 @dataclass
 class PairRelation:
     leg_a: str
@@ -65,6 +89,26 @@ def _parse_total_market(market_key: str) -> Tuple[Optional[str], Optional[float]
     return None, None
 
 
+def _totals_chain_rank(side: str, line: float) -> Optional[int]:
+    chain = OVER_TOTALS_CHAIN if side == "over" else UNDER_TOTALS_CHAIN
+    if line not in chain:
+        return None
+    return chain.index(line)
+
+
+def _nested_totals_strength(side: str, line_a: float, line_b: float) -> float:
+    rank_a = _totals_chain_rank(side, line_a)
+    rank_b = _totals_chain_rank(side, line_b)
+    if rank_a is None or rank_b is None:
+        return 0.85
+    distance = abs(rank_a - rank_b)
+    if distance == 1:
+        return 0.85
+    if distance == 2:
+        return 0.75
+    return 0.70
+
+
 def _double_chance_outcomes(market_key: str) -> Optional[set[str]]:
     mapping = {
         "double_chance_home_or_draw": {"home", "draw"},
@@ -88,6 +132,7 @@ def _specificity_hint(market_key: str) -> float:
         "double_chance_home_or_draw": 0.40,
         "double_chance_away_or_draw": 0.40,
         "double_chance_home_or_away": 0.30,
+        "over_0_5": 0.10,
         "over_1_5": 0.20,
         "over_2_5": 0.50,
         "over_3_5": 0.70,
@@ -100,6 +145,37 @@ def _specificity_hint(market_key: str) -> float:
         "btts_no": 0.55,
     }
     return hints.get(market_key, 0.50)
+
+
+def _count_same_chain_legs(market_keys: Iterable[str]) -> Dict[str, int]:
+    counts = {"over": 0, "under": 0}
+    for market_key in market_keys:
+        side, line = _parse_total_market(market_key)
+        if side is None or line is None:
+            continue
+        if _totals_chain_rank(side, line) is not None:
+            counts[side] += 1
+    return counts
+
+
+def build_market_relation_matrix(
+    markets: Optional[Iterable[str]] = None,
+) -> Dict[str, Dict[str, PairRelation]]:
+    """
+    Build the full pairwise relation matrix for core parlay markets.
+
+    Returns a nested dict: matrix[leg_a][leg_b] -> PairRelation (leg_a <= leg_b lexicographically).
+    """
+    market_list = list(markets) if markets is not None else list(CORE_PARLAY_MARKETS)
+    matrix: Dict[str, Dict[str, PairRelation]] = {}
+    for leg_a in market_list:
+        matrix[leg_a] = {}
+        for leg_b in market_list:
+            if leg_a == leg_b:
+                continue
+            relation = classify_market_relation(leg_a, leg_b)
+            matrix[leg_a][leg_b] = relation
+    return matrix
 
 
 def classify_market_relation(leg_a: Any, leg_b: Any) -> PairRelation:
@@ -147,8 +223,7 @@ def classify_market_relation(leg_a: Any, leg_b: Any) -> PairRelation:
             return PairRelation(ordered_a, ordered_b, MarketRelationType.CONTRADICTORY, 1.0, "BTTS Yes cannot coexist with Under 1.5.")
 
     if total_side_a and total_side_b and total_side_a == total_side_b:
-        distance = abs(total_line_a - total_line_b)
-        strength = 0.85 if distance <= 1.0 else 0.70
+        strength = _nested_totals_strength(total_side_a, total_line_a, total_line_b)
         return PairRelation(
             ordered_a,
             ordered_b,
@@ -296,10 +371,16 @@ def evaluate_ticket_structure(legs: Iterable[Any]) -> TicketStructureEvaluation:
 
     rejection_reasons: List[str] = []
     families = [_market_family(key) for key in normalized_legs]
+    chain_counts = _count_same_chain_legs(normalized_legs)
+
     if contradiction_penalty >= 1.0:
         rejection_reasons.append("Ticket contains contradictory legs.")
     if redundancy_penalty >= 0.85:
         rejection_reasons.append("Ticket contains nested or redundant legs with excessive overlap.")
+    if chain_counts["over"] >= 2:
+        rejection_reasons.append("Ticket stacks nested Over legs on the same totals chain.")
+    if chain_counts["under"] >= 2:
+        rejection_reasons.append("Ticket stacks nested Under legs on the same totals chain.")
     if weak_information_penalty >= 0.70 and information_gain_score < 0.25:
         rejection_reasons.append("Ticket is too broad and adds little information.")
     if families and max(families.count(family) for family in set(families)) >= 3:

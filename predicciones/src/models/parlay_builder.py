@@ -6,7 +6,7 @@ Generates intelligent, non-redundant, game-script-based parlays using full combi
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Any, Tuple, Optional, Set
+from typing import Dict, List, Any, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
 from itertools import combinations
@@ -79,14 +79,6 @@ class SameGameParlayResult:
     game_script_rationale: str
     is_valid: bool = True
     structure_evaluation: Optional[TicketStructureEvaluation] = None
-
-
-class MarketRelationship(Enum):
-    """Types of relationships between two markets"""
-    CONTRADICTORY = "contradictory"
-    REDUNDANT = "redundant"
-    COMPLEMENTARY = "complementary"
-    NEUTRAL = "neutral"
 
 
 class CalibrationStatus:
@@ -165,68 +157,6 @@ def get_market_specificity(market_type: MarketType) -> float:
         MarketType.BTTS_NO: 0.5,
     }
     return specificity_map.get(market_type, 0.5)
-
-
-def get_market_relationship(a: MarketType, b: MarketType) -> MarketRelationship:
-    """Get the relationship between two markets"""
-    # Direct contradictions
-    contradictory_pairs: Set[Tuple[MarketType, MarketType]] = {
-        (MarketType.ONE_X_TWO_HOME, MarketType.ONE_X_TWO_AWAY),
-        (MarketType.ONE_X_TWO_HOME, MarketType.DOUBLE_CHANCE_AWAY_OR_DRAW),
-        (MarketType.ONE_X_TWO_AWAY, MarketType.DOUBLE_CHANCE_HOME_OR_DRAW),
-        (MarketType.ONE_X_TWO_HOME, MarketType.ONE_X_TWO_DRAW),
-        (MarketType.ONE_X_TWO_AWAY, MarketType.ONE_X_TWO_DRAW),
-        (MarketType.OVER_1_5, MarketType.UNDER_1_5),
-        (MarketType.OVER_2_5, MarketType.UNDER_2_5),
-        (MarketType.OVER_3_5, MarketType.UNDER_3_5),
-        (MarketType.OVER_4_5, MarketType.UNDER_4_5),
-        (MarketType.BTTS_YES, MarketType.BTTS_NO),
-        (MarketType.UNDER_1_5, MarketType.BTTS_YES),
-    }
-    if (a, b) in contradictory_pairs or (b, a) in contradictory_pairs:
-        return MarketRelationship.CONTRADICTORY
-        
-    # Redundant/nested markets
-    redundant_pairs: Set[Tuple[MarketType, MarketType]] = {
-        (MarketType.OVER_1_5, MarketType.OVER_2_5),
-        (MarketType.OVER_1_5, MarketType.OVER_3_5),
-        (MarketType.OVER_1_5, MarketType.OVER_4_5),
-        (MarketType.OVER_2_5, MarketType.OVER_3_5),
-        (MarketType.OVER_2_5, MarketType.OVER_4_5),
-        (MarketType.OVER_3_5, MarketType.OVER_4_5),
-        (MarketType.UNDER_4_5, MarketType.UNDER_3_5),
-        (MarketType.UNDER_4_5, MarketType.UNDER_2_5),
-        (MarketType.UNDER_4_5, MarketType.UNDER_1_5),
-        (MarketType.UNDER_3_5, MarketType.UNDER_2_5),
-        (MarketType.UNDER_3_5, MarketType.UNDER_1_5),
-        (MarketType.UNDER_2_5, MarketType.UNDER_1_5),
-        (MarketType.DOUBLE_CHANCE_HOME_OR_DRAW, MarketType.ONE_X_TWO_HOME),
-        (MarketType.DOUBLE_CHANCE_HOME_OR_DRAW, MarketType.ONE_X_TWO_DRAW),
-        (MarketType.DOUBLE_CHANCE_AWAY_OR_DRAW, MarketType.ONE_X_TWO_AWAY),
-        (MarketType.DOUBLE_CHANCE_AWAY_OR_DRAW, MarketType.ONE_X_TWO_DRAW),
-        (MarketType.DOUBLE_CHANCE_HOME_OR_AWAY, MarketType.ONE_X_TWO_HOME),
-        (MarketType.DOUBLE_CHANCE_HOME_OR_AWAY, MarketType.ONE_X_TWO_AWAY),
-    }
-    if (a, b) in redundant_pairs or (b, a) in redundant_pairs:
-        return MarketRelationship.REDUNDANT
-        
-    # Complementary markets
-    complementary_pairs: Set[Tuple[MarketType, MarketType]] = {
-        (MarketType.OVER_2_5, MarketType.BTTS_YES),
-        (MarketType.OVER_3_5, MarketType.BTTS_YES),
-        (MarketType.ONE_X_TWO_HOME, MarketType.OVER_1_5),
-        (MarketType.ONE_X_TWO_AWAY, MarketType.OVER_1_5),
-        (MarketType.DOUBLE_CHANCE_HOME_OR_DRAW, MarketType.UNDER_3_5),
-        (MarketType.DOUBLE_CHANCE_AWAY_OR_DRAW, MarketType.UNDER_3_5),
-        (MarketType.DOUBLE_CHANCE_HOME_OR_DRAW, MarketType.UNDER_2_5),
-        (MarketType.DOUBLE_CHANCE_AWAY_OR_DRAW, MarketType.UNDER_2_5),
-        (MarketType.ONE_X_TWO_HOME, MarketType.BTTS_NO),
-        (MarketType.ONE_X_TWO_AWAY, MarketType.BTTS_NO),
-    }
-    if (a, b) in complementary_pairs or (b, a) in complementary_pairs:
-        return MarketRelationship.COMPLEMENTARY
-        
-    return MarketRelationship.NEUTRAL
 
 
 def compute_real_confidence(
