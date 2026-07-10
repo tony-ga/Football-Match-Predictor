@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 
 logger = logging.getLogger(__name__)
+__all__ = []
 
 
 # ---------------------------------------------------------------------------
@@ -564,3 +565,68 @@ def derive_player_shot_markets(pred_data: Dict[str, Any]) -> List[Dict[str, Any]
             })
             
     return candidates
+
+# ---------------------------------------------------------------------------
+# Joint Parlay Probability Utilities (Goal‑derived markets only)
+# ---------------------------------------------------------------------------
+from typing import List, Tuple
+import numpy as np
+
+def _mask_from_condition(matrix: np.ndarray, condition: Tuple[str, any]) -> np.ndarray:
+    """Return a boolean mask for a single market condition.
+
+    Supported keys: 1x2_home, 1x2_draw, 1x2_away, double_chance_*, btts_*, over_*/under_*, correct_score_*
+    The value part is ignored for boolean markets.
+    """
+    key, _ = condition
+    max_goals = matrix.shape[0] - 1
+    i = np.arange(max_goals + 1)[:, None]
+    j = np.arange(max_goals + 1)[None, :]
+    if key == '1x2_home':
+        return i > j
+    if key == '1x2_draw':
+        return i == j
+    if key == '1x2_away':
+        return i < j
+    if key == 'double_chance_home_or_draw':
+        return (i > j) | (i == j)
+    if key == 'double_chance_away_or_draw':
+        return (i < j) | (i == j)
+    if key == 'double_chance_home_or_away':
+        return (i > j) | (i < j)
+    if key == 'btts_yes':
+        return (i > 0) & (j > 0)
+    if key == 'btts_no':
+        return (i == 0) | (j == 0)
+    if key.startswith('over_') or key.startswith('under_'):
+        parts = key.split('_')
+        threshold = float(parts[1] + '.' + parts[2])
+        total = i + j
+        return (total > threshold) if key.startswith('over') else (total < threshold)
+    raise ValueError(f"Unsupported market condition: {key}")
+
+def compute_joint_parlay_probability(
+    matrix: np.ndarray,
+    conditions: List[Tuple[str, any]],
+    max_goals: int = 8,
+) -> float:
+    """Exact joint probability for a set of goal‑derived market conditions.
+
+    The function builds a mask for each condition, ANDs them together and
+    sums the probabilities of the remaining cells.
+    """
+    # Truncate matrix if larger than max_goals+1
+    if matrix.shape[0] - 1 > max_goals:
+        matrix = matrix[: max_goals + 1, : max_goals + 1]
+    combined = np.ones_like(matrix, dtype=bool)
+    for cond in conditions:
+        combined &= _mask_from_condition(matrix, cond)
+        if not combined.any():
+            return 0.0
+    joint = float(matrix[combined].sum())
+    return max(0.0, min(1.0, joint))
+
+# Export symbols
+__all__.extend([
+    'compute_joint_parlay_probability',
+])

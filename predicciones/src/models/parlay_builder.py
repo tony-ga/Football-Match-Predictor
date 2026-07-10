@@ -88,6 +88,7 @@ class SameGameParlayResult:
     game_script_rationale: str
     is_valid: bool = True
     structure_evaluation: Optional[TicketStructureEvaluation] = None
+    is_hybrid: bool = False
 
 
 class CalibrationStatus:
@@ -453,11 +454,34 @@ def generate_game_script_explanation(
     return narrative
 
 
+def _compute_combined_probability(parlay: List[PickCandidate], pred_data: Dict[str, Any]) -> Tuple[float, bool]:
+    """Compute the combined probability and whether the ticket is hybrid."""
+    def _is_goal_derived(key: str) -> bool:
+        return (
+            key.startswith("1x2_")
+            or key.startswith("double_chance_")
+            or key.startswith("over_")
+            or key.startswith("under_")
+            or key.startswith("btts_")
+        )
+
+    all_goal = all(_is_goal_derived(p.market_key) for p in parlay)
+    matrix = pred_data.get("score_matrix")
+    if all_goal and matrix is not None:
+        conditions = [(p.market_key, None) for p in parlay]
+        joint_prob = compute_joint_parlay_probability(matrix, conditions)
+        return float(joint_prob), False
+    
+    # Hybrid or non-goal derived ticket
+    combined_prob = float(np.prod([p.model_probability for p in parlay]))
+    return combined_prob, not all_goal
+
+
 def build_all_same_game_parlays(
     pred_data: Dict[str, Any],
     home_team: str,
     away_team: str,
-    calib_status: CalibrationStatus
+    calib_status: CalibrationStatus,
 ) -> Tuple[List[SameGameParlayResult], CalibrationStatus]:
     """Build all three same game parlays for a single match using combination search"""
     # Generate candidate picks
@@ -517,7 +541,7 @@ def build_all_same_game_parlays(
                 structure_evaluation=None,
             ))
         else:
-            combined_prob = np.prod([p.model_probability for p in best_parlay])
+            combined_prob, is_hybrid_calc = _compute_combined_probability(best_parlay, pred_data)
             results.append(SameGameParlayResult(
                 risk_level=risk_level,
                 picks=best_parlay,
@@ -528,6 +552,7 @@ def build_all_same_game_parlays(
                 ),
                 is_valid=True,
                 structure_evaluation=best_structure,
+                is_hybrid=is_hybrid_calc,
             ))
             
     return results, calib_status
@@ -649,6 +674,8 @@ def _render_single_same_game_parlay(
         border_style=border_color,
     ))
     console.print(f"[bold]Combined Probability: {parlay.combined_probability:.1%}[/bold]")
+    if parlay.is_hybrid:
+        console.print("[dim italic]* Hybrid ticket – combined probability is approximate; exact joint applies only to goal‑derived portion.[/dim italic]")
     if parlay.structure_evaluation is not None:
         structure = parlay.structure_evaluation
         console.print(

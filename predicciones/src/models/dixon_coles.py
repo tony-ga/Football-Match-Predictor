@@ -1,18 +1,17 @@
 """
 Dixon-Coles model for football match prediction.
 
-Reference: Dixon, M.J. & Coles, S.G. (1997). "Modelling Association Football
-Scores and Inefficiencies in the Football Betting Market."
+Reference: Dixon, M.J. & Coles, S.G. (1997). "Modelling Association Football Scores and Inefficiencies in the Football Betting Market."
 Applied Statistics, 46(2), 265-280.
 
 Key features over simple Poisson:
-- Low-score correction (rho parameter): adjusts P(0-0), P(1-0), P(0-1), P(1-1)
-  to account for correlation between home and away goals in low-scoring games.
+- Low-score correction (rho parameter): adjusts P(0-0), P(1-0), P(0-1), P(1-1) to capture correlation between home and away goals in low-scoring games.
 - Temporal decay: more recent matches weighted more heavily in MLE.
 - Trainable attack/defense parameters per team.
-- Heuristic mode: estimates lambdas from features when no trained params available.
-- Markov-aware mode: optionally incorporates Markov state features for in-play
-  prediction (requires markov_features module to be loaded).
+- Heuristic mode: estimates lambdas from features when no trained params are available.
+- Markov-aware mode: optionally incorporates Markov state features for in-play prediction (requires `markov_features` module).
+
+**Important:** The core function `dc_score_matrix` always applies the Dixon-Coles low-score correlation correction using the `rho` parameter (default -0.13). Setting `rho` to 0 disables the correction. This explicit note clarifies the correction status for downstream code.
 """
 from __future__ import annotations
 
