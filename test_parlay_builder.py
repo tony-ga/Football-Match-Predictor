@@ -9,10 +9,20 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from predicciones.src.models.parlay_builder import build_all_parlays
+from predicciones.src.models.parlay_builder import (
+    build_all_parlays,
+    render_parlay
+)
 from predicciones.src.pipeline.predict import predict_match_pipeline
 from rich.console import Console
 import pandas as pd
+import logging
+
+# Disable repeated missing calibrator warnings
+logging.getLogger("predicciones.src.pipeline.predict").setLevel(logging.ERROR)
+logging.getLogger("predicciones.src.models.market_derivation").setLevel(logging.ERROR)
+logging.getLogger("predicciones.src.models.lambda_recalibration").setLevel(logging.ERROR)
+logging.getLogger("predicciones.src.models.calibration").setLevel(logging.ERROR)
 
 console = Console()
 
@@ -51,11 +61,14 @@ def main():
         return
 
     # Step 3: Build and render all parlays
-    from predicciones.src.models.parlay_builder import render_parlay, RiskLevel
-    parlays = build_all_parlays(match_predictions)
+    parlays, calib_status = build_all_parlays(match_predictions)
     
-    for risk_level in [RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH]:
-        render_parlay(parlays[risk_level], risk_level, console)
+    # Show calibration status once
+    if calib_status.get_warning():
+        console.print(f"\n[yellow]{calib_status.get_warning()}[/yellow]\n")
+        
+    for parlay_result in parlays:
+        render_parlay(parlay_result, console)
 
 if __name__ == "__main__":
     main()

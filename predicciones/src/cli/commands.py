@@ -878,10 +878,15 @@ def run_parlay_builder(console: Console) -> None:
     """
     from predicciones.src.models.parlay_builder import (
         build_all_parlays,
-        render_parlay,
-        RiskLevel
+        render_parlay
     )
     from predicciones.src.pipeline.predict import predict_match_pipeline
+    import logging
+    # Disable repeated missing calibrator warnings for this function
+    logging.getLogger("predicciones.src.pipeline.predict").setLevel(logging.ERROR)
+    logging.getLogger("predicciones.src.models.market_derivation").setLevel(logging.ERROR)
+    logging.getLogger("predicciones.src.models.lambda_recalibration").setLevel(logging.ERROR)
+    logging.getLogger("predicciones.src.models.calibration").setLevel(logging.ERROR)
     
     console.print("\n[bold blue]=== AUTOMATIC PARLAY BUILDER ===[/bold blue]\n")
     
@@ -922,11 +927,15 @@ def run_parlay_builder(console: Console) -> None:
         
     # Step 3: Build all parlays
     console.print(f"\n[green]Building parlays from {len(match_predictions)} match prediction(s)...[/green]\n")
-    parlays = build_all_parlays(match_predictions)
+    parlays, calib_status = build_all_parlays(match_predictions)
     
+    # Show calibration status once (not repeated!)
+    if calib_status.get_warning():
+        console.print(f"[yellow]{calib_status.get_warning()}[/yellow]\n")
+        
     # Step 4: Render each parlay
-    for risk_level in [RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH]:
-        render_parlay(parlays[risk_level], risk_level, console)
+    for parlay_result in parlays:
+        render_parlay(parlay_result, console)
 
 
 def choose_from_table(
