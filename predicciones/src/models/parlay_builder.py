@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Any, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from itertools import combinations
 import numpy as np
@@ -16,6 +16,7 @@ from .market_evaluation import (
     EvaluatedMarket,
     MarketFilterConfig,
     MarketSelectionStatus,
+    ProbabilityReference,
     evaluate_core_market_set,
     render_market_evaluation_report,
 )
@@ -26,6 +27,7 @@ from .ticket_structure import (
 )
 from .market_catalog import build_market_catalog, RiskProfile, MarketDefinition, MarketFamily
 from .market_derivation import derive_goal_markets, derive_corner_markets, derive_player_shot_markets
+from .calibration import CalibrationManager
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,12 @@ class MarketType(Enum):
     BTTS_NO = "btts_no"
 
 
+class PickMode(Enum):
+    VALUE_BASED = "value_based"
+    MODEL_ONLY = "model_only"
+    HYBRID = "hybrid"
+
+
 @dataclass
 class PickCandidate:
     """Single pick candidate for a same game parlay leg"""
@@ -70,12 +78,16 @@ class PickCandidate:
     market_key: str = ""
     interpretation: str = ""
     risk_fit: List[RiskProfile] = field(default_factory=list) if 'field' in globals() else None
-    is_calibrated: bool = False
+    calibrated_probability: Optional[float] = None
+    calibration_status: str = "not_calibrated"
     market_evaluation: Optional[EvaluatedMarket] = None
+    pick_mode: PickMode = PickMode.MODEL_ONLY
 
     def __post_init__(self):
         if self.risk_fit is None:
             self.risk_fit = []
+        if self.pick_mode is None:
+            self.pick_mode = PickMode.MODEL_ONLY
 
 
 @dataclass
@@ -104,6 +116,49 @@ class CalibrationStatus:
         if not self.missing_calibrators:
             return ""
         return f"Calibration status: missing {len(self.missing_calibrators)} calibrators, using fallback probabilities"
+
+
+def apply_calibration_to_predictions(
+    pred_data: Dict[str, Any],
+    calib_manager: Optional[CalibrationManager] = None
+) -> Tuple[Dict[str, Any], CalibrationStatus]:
+    """
+    Apply calibration to predictions before market evaluation.
+    
+    Returns:
+        - Updated pred_data with calibrated probabilities
+        - CalibrationStatus indicating what was calibrated
+    """
+    status = CalibrationStatus()
+    
+    if calib_manager is None or not calib_manager.calibrators:
+        status.add_missing("no_calibrator_loaded")
+        return pred_data, status
+    
+    raw_markets = pred_data.get('predictions', {})
+    if not raw_markets:
+        status.add_missing("no_predictions")
+        return pred_data, status
+    
+    # Apply calibration
+    calibrated_markets = calib_manager.calibrate_markets(raw_markets)
+    pred_data['predictions_calibrated'] = calibrated_markets
+    
+    # Track which markets were calibrated
+    for market_name in ['1x2', 'btts']:
+        if market_name in calib_manager.calibrators and market_name in calibrated_markets:
+            logger.info(f"Calibrated market: {market_name}")
+        else:
+            status.add_missing(f"cal_{market_name}")
+    
+    for line in ['15', '25', '35']:
+        cal_name = f'over_under_{line}'
+        if cal_name in calib_manager.calibrators:
+            logger.info(f"Calibrated market: {cal_name}")
+        else:
+            status.add_missing(f"cal_{cal_name}")
+    
+    return pred_data, status
 
 
 def check_calibration() -> CalibrationStatus:
@@ -257,7 +312,8 @@ def generate_same_game_candidates(
     pred_data: Dict[str, Any],
     home_team: str,
     away_team: str,
-    calib_status: CalibrationStatus
+    calib_status: CalibrationStatus,
+    use_calibration: bool = True,
 ) -> List[PickCandidate]:
     """Generate candidate picks using the market catalog and derivation logic."""
     candidates = []
@@ -266,24 +322,32 @@ def generate_same_game_candidates(
 
     catalog = build_market_catalog()
     
-    # Run derivations
+    # Determine which predictions to use (calibrated or raw)
+    if use_calibration and 'predictions_calibrated' in pred_data:
+        predictions_to_use = pred_data['predictions_calibrated']
+        logger.info("Using calibrated probabilities for candidate generation")
+    else:
+        predictions_to_use = pred_data.get('predictions', {})
+        if use_calibration and not calib_status.is_calibrated:
+            logger.info("Calibration requested but not available; using raw probabilities")
+    
+    # Run derivations with the appropriate predictions
     derived_markets = []
-    derived_markets.extend(derive_goal_markets(pred_data))
+    derived_markets.extend(derive_goal_markets({**pred_data, 'predictions': predictions_to_use}))
     derived_markets.extend(derive_corner_markets(pred_data))
     derived_markets.extend(derive_player_shot_markets(pred_data))
 
     confidence_map: Dict[str, float] = {}
     confidence_rationales: Dict[str, str] = {}
     
-    # We still use evaluate_core_market_set, which expects specific nested predictions.
-    # To not break it completely, we'll let it evaluate what it can (mainly goals).
+    # Evaluate markets using calibrated predictions if available
     evaluations = evaluate_core_market_set(
         match_name=match_name,
         home_team=home_team,
         away_team=away_team,
-        predictions=pred_data.get('predictions', {}),
+        predictions=predictions_to_use,
         sportsbook_odds=pred_data.get("sportsbook_odds"),
-        confidence_scores={},  # We skip pre-calculating for now to simplify
+        confidence_scores={},
         filter_config=_base_market_filter_config(),
     )
     pred_data["market_evaluations"] = evaluations
@@ -304,36 +368,80 @@ def generate_same_game_candidates(
             
         market_name = derived.get("name_override", definition.name)
         
-        # Calculate a pseudo-confidence for now (can be refined per family)
-        conf = prob
-        conf_rationale = f"Model probability: {prob:.1%}."
+        # Get calibrated probability if available
+        calibrated_prob = None
+        calibration_status_str = "not_calibrated"
+        
+        if use_calibration and 'predictions_calibrated' in pred_data:
+            cal_predictions = pred_data['predictions_calibrated']
+            # Try to get calibrated probability for this market
+            try:
+                if market_key.startswith("1x2_"):
+                    selection = market_key.split("1x2_", 1)[1]
+                    calibrated_prob = cal_predictions.get('1x2', {}).get(selection)
+                elif market_key.startswith("btts_"):
+                    selection = market_key.split("btts_", 1)[1]
+                    calibrated_prob = cal_predictions.get('btts', {}).get(selection)
+                elif market_key.startswith(("over_", "under_")):
+                    parts = market_key.split("_", 1)
+                    side = parts[0]
+                    line = parts[1].replace("_", ".")
+                    calibrated_prob = cal_predictions.get('over_under', {}).get(f"{side}_{line.replace('.', '_')}")
+                
+                if calibrated_prob is not None:
+                    calibration_status_str = "calibrated"
+                    # Use calibrated probability for scoring
+                    prob_for_scoring = calibrated_prob
+                else:
+                    calibration_status_str = "fallback_raw"
+                    prob_for_scoring = prob
+            except (KeyError, AttributeError):
+                calibration_status_str = "fallback_raw"
+                prob_for_scoring = prob
+        else:
+            prob_for_scoring = prob
+        
+        # Calculate confidence
+        conf = prob_for_scoring
+        conf_rationale = f"Model probability: {prob_for_scoring:.1%}."
         
         if "double_chance" in market_key:
             conf += 0.05
-        if not calib_status.is_calibrated:
+        if not calib_status.is_calibrated and use_calibration:
             conf *= 0.85
+            conf_rationale += " Penalty: uncalibrated model."
             
         conf = np.clip(conf, 0.0, 1.0)
         
         evaluation = evaluation_by_key.get(market_key)
         if evaluation and evaluation.status == MarketSelectionStatus.DISCARDED:
             continue
-
+        
+        # Determine pick mode based on odds availability
+        pick_mode = PickMode.MODEL_ONLY
+        if evaluation is not None and evaluation.sportsbook_odds is not None:
+            if evaluation.ev is not None:
+                pick_mode = PickMode.VALUE_BASED
+            elif evaluation.reference_probability is not None:
+                pick_mode = PickMode.HYBRID
+        
         candidates.append(PickCandidate(
             match_id=match_id,
             home_team=home_team,
             away_team=away_team,
-            market_type=market_key,  # use string key
+            market_type=market_key,
             market_name=market_name,
             model_probability=prob,
+            calibrated_probability=calibrated_prob,
             confidence_score=conf,
-            final_score=(prob * conf) + _selectivity_adjustment(evaluation),
+            final_score=(prob_for_scoring * conf) + _selectivity_adjustment(evaluation),
             rationale=conf_rationale,
             market_key=market_key,
             interpretation=definition.interpretation,
             risk_fit=definition.risk_fit,
-            is_calibrated=calib_status.is_calibrated,
+            calibration_status=calibration_status_str,
             market_evaluation=evaluation,
+            pick_mode=pick_mode,
         ))
 
     candidates.sort(key=lambda c: -c.final_score)
@@ -482,10 +590,22 @@ def build_all_same_game_parlays(
     home_team: str,
     away_team: str,
     calib_status: CalibrationStatus,
+    calib_manager: Optional[CalibrationManager] = None,
 ) -> Tuple[List[SameGameParlayResult], CalibrationStatus]:
     """Build all three same game parlays for a single match using combination search"""
-    # Generate candidate picks
-    candidates = generate_same_game_candidates(pred_data, home_team, away_team, calib_status)
+    
+    # Apply calibration to predictions if calibrator is available
+    if calib_manager is not None and calib_manager.calibrators:
+        pred_data, calib_status = apply_calibration_to_predictions(pred_data, calib_manager)
+    
+    # Generate candidate picks with calibration support
+    candidates = generate_same_game_candidates(
+        pred_data, 
+        home_team, 
+        away_team, 
+        calib_status,
+        use_calibration=True,
+    )
     if not candidates:
         return [], calib_status
         
@@ -645,26 +765,41 @@ def _render_single_same_game_parlay(
         console.print()
         return
         
-    # Build the picks table
+    # Build the picks table with calibration and pick mode info
     table = Table(title=title, show_header=True, header_style="bold magenta")
     table.add_column("#", justify="right", style="cyan")
     table.add_column("Pick", style="green")
-    table.add_column("Probability", justify="right")
-    table.add_column("Confidence", justify="right")
+    table.add_column("Raw Prob", justify="right")
+    table.add_column("Calib Prob", justify="right")
+    table.add_column("Calib Status", justify="right")
     table.add_column("Edge", justify="right")
     table.add_column("EV", justify="right")
-    table.add_column("Status", justify="right")
+    table.add_column("Mode", justify="right")
     
     for i, pick in enumerate(parlay.picks, 1):
         evaluation = pick.market_evaluation
+        
+        # Format calibrated probability
+        if pick.calibrated_probability is not None:
+            calib_prob_str = f"{pick.calibrated_probability:.1%}"
+        else:
+            calib_prob_str = "-"
+        
+        # Format calibration status
+        calib_status_str = pick.calibration_status if pick.calibration_status else "not_calibrated"
+        
+        # Format pick mode
+        mode_str = pick.pick_mode.value if pick.pick_mode else "model_only"
+        
         table.add_row(
             str(i),
             pick.market_name,
             f"{pick.model_probability:.1%}",
-            f"{pick.confidence_score:.1%}",
+            calib_prob_str,
+            calib_status_str,
             f"{evaluation.edge:+.1%}" if evaluation and evaluation.edge is not None else "-",
             f"{evaluation.ev:+.3f}" if evaluation and evaluation.ev is not None else "-",
-            evaluation.status.value.upper() if evaluation else "-",
+            mode_str.upper(),
         )
         
     # Render the panel and details
@@ -674,8 +809,26 @@ def _render_single_same_game_parlay(
         border_style=border_color,
     ))
     console.print(f"[bold]Combined Probability: {parlay.combined_probability:.1%}[/bold]")
+    
+    # Show hybrid ticket warning
     if parlay.is_hybrid:
         console.print("[dim italic]* Hybrid ticket – combined probability is approximate; exact joint applies only to goal‑derived portion.[/dim italic]")
+    
+    # Show pick mode summary
+    value_based_count = sum(1 for p in parlay.picks if p.pick_mode == PickMode.VALUE_BASED)
+    model_only_count = sum(1 for p in parlay.picks if p.pick_mode == PickMode.MODEL_ONLY)
+    hybrid_count = sum(1 for p in parlay.picks if p.pick_mode == PickMode.HYBRID)
+    
+    if value_based_count > 0 or model_only_count > 0:
+        mode_parts = []
+        if value_based_count > 0:
+            mode_parts.append(f"[green]{value_based_count} value-based[/green]")
+        if model_only_count > 0:
+            mode_parts.append(f"[yellow]{model_only_count} model-only[/yellow]")
+        if hybrid_count > 0:
+            mode_parts.append(f"[blue]{hybrid_count} hybrid[/blue]")
+        console.print(f"[dim]Picks: {', '.join(mode_parts)}[/dim]")
+    
     if parlay.structure_evaluation is not None:
         structure = parlay.structure_evaluation
         console.print(
