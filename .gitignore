@@ -1,1 +1,29 @@
-Nothing should be ignored based on the provided file changes. The modification of 'predicciones/src/data/espn_stats_parsers.py' is a source code file change, which does not require any new ignore rules.
+# Examples 1:
+(empty — output nothing)
+
+# Example 2 (Project with artifacts):
+# Compiled and build artifacts
+*.pyc
+__pycache__/
+*.o
+*.obj
+dist/
+build/
+# Dependencies
+.venv/
+venv/
+node_modules/
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+# Environment
+.env
+.env.local
+.env.*
+# Editors
+.vscode/
+.idea/
+
+# Original rules preserved
+*.log
