@@ -12,6 +12,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import json
 import csv
+import pandas as pd
 
 from rich.console import Console
 from rich.table import Table
@@ -433,6 +434,36 @@ def list_recent_outputs(limit: int = 10) -> List[Dict[str, Any]]:
     return outputs[:limit]
 
 
+def parse_date(date_str: str) -> str:
+    """
+    Parse and normalize date string to YYYY-MM-DD format.
+    
+    Accepts:
+        - YYYYMMDD (e.g., 20250715)
+        - YYYY-MM-DD (e.g., 2025-07-15)
+    
+    Returns:
+        Date string in YYYY-MM-DD format.
+    """
+    from datetime import datetime
+    
+    if len(date_str) == 8 and date_str.isdigit():
+        try:
+            date_obj = datetime.strptime(date_str, "%Y%m%d")
+            return date_obj.strftime("%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"Invalid date format: {date_str}")
+    
+    if len(date_str) == 10:
+        try:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+            return date_obj.strftime("%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"Invalid date format: {date_str}")
+    
+    raise ValueError(f"Unrecognized date format: {date_str}. Use YYYYMMDD or YYYY-MM-DD")
+
+
 def get_config_sections() -> List[str]:
     """Get available configuration sections from config file."""
     from predicciones.src.utils.config_loader import config
@@ -441,6 +472,404 @@ def get_config_sections() -> List[str]:
         return []
     
     return sorted([k for k in config.keys() if isinstance(config[k], dict)])
+
+
+# ================================================
+# New functions for automatic fixtures and pipeline
+# ================================================
+
+def detect_available_matches(
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    competition: Optional[str] = None,
+    team: Optional[str] = None
+) -> pd.DataFrame:
+    """
+    Detect available matches from data sources or existing fixture files.
+    
+    Args:
+        from_date: Start date in YYYY-MM-DD or YYYYMMDD format
+        to_date: End date in YYYY-MM-DD or YYYYMMDD format
+        competition: Competition filter
+        team: Team filter
+        
+    Returns:
+        DataFrame with available matches
+    """
+    from datetime import datetime, timedelta
+    
+    # If no dates specified, default to today + next 7 days
+    if not from_date:
+        from_date = datetime.now().strftime("%Y-%m-%d")
+    else:
+        from_date = parse_date(from_date)
+        
+    if not to_date:
+        to_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+    else:
+        to_date = parse_date(to_date)
+        
+    # Try to fetch fixtures for date range
+    all_matches = []
+    
+    # First, check existing fixture files
+    fixtures = list_available_fixtures()
+    if fixtures:
+        for fix in fixtures:
+            try:
+                fix_date = parse_date(fix.get('date', ''))
+                if from_date <= fix_date <= to_date:
+                    # Read the fixture file
+                    fix_path = Path(fix['path'])
+                    if fix_path.is_file():
+                        df_fix = pd.read_csv(fix_path)
+                        all_matches.append(df_fix)
+            except:
+                continue
+                
+    # If no existing fixtures, try to fetch new ones
+    if not all_matches:
+        try:
+            from predicciones.scripts.fetch_daily_fixtures import fetch_fixtures_for_date
+            current_date = datetime.strptime(from_date, "%Y-%m-%d")
+            end_date = datetime.strptime(to_date, "%Y-%m-%d")
+            
+            while current_date <= end_date:
+                try:
+                    df_day = fetch_fixtures_for_date(current_date.strftime("%Y-%m-%d"))
+                    if len(df_day) > 0:
+                        all_matches.append(df_day)
+                except:
+                    pass
+                current_date += timedelta(days=1)
+        except:
+            pass
+            
+    if all_matches:
+        df = pd.concat(all_matches, ignore_index=True)
+    else:
+        # Return empty DataFrame with standard columns
+        df = pd.DataFrame(columns=['match_id', 'home_team', 'away_team', 'competition', 
+                                  'date', 'kickoff_datetime', 'neutral_venue'])
+        
+    # Apply filters
+    if competition:
+        comp_col = 'competition' if 'competition' in df.columns else 'league'
+        if comp_col in df.columns:
+            df = df[df[comp_col].str.contains(competition, case=False, na=False)]
+            
+    if team:
+        if 'home_team' in df.columns and 'away_team' in df.columns:
+            df = df[
+                df['home_team'].str.contains(team, case=False, na=False) | 
+                df['away_team'].str.contains(team, case=False, na=False)
+            ]
+            
+    return df
+
+
+def build_fixture_file_from_matches(
+    matches_df: pd.DataFrame,
+    filename: Optional[str] = None
+) -> Path:
+    """
+    Build a fixture file from a DataFrame of matches.
+    
+    Args:
+        matches_df: DataFrame with match data
+        filename: Optional filename (without .csv)
+        
+    Returns:
+        Path to the saved fixture file
+    """
+    if filename is None:
+        from datetime import datetime
+        filename = f"auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+    output_dir = project_root / "predicciones" / "data" / "fixtures"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    output_path = output_dir / f"{filename}.csv"
+    matches_df.to_csv(output_path, index=False)
+    
+    return output_path
+
+
+def preview_fixture_selection(matches_df: pd.DataFrame, console: Console) -> bool:
+    """
+    Display a preview of selected matches and ask for confirmation.
+    
+    Args:
+        matches_df: DataFrame of matches
+        console: Rich Console object
+        
+    Returns:
+        True if user confirms, False otherwise
+    """
+    if len(matches_df) == 0:
+        console.print("[yellow]No matches to preview![/yellow]")
+        return False
+        
+    console.print(f"\n[bold blue]Preview of {len(matches_df)} matches:[/bold blue]")
+    
+    table = Table(title="Matches", show_header=True, header_style="bold magenta")
+    table.add_column("#", justify="right", style="cyan")
+    table.add_column("Date", style="white")
+    table.add_column("Home Team", style="cyan")
+    table.add_column("Away Team", style="yellow")
+    table.add_column("Competition", style="dim")
+    
+    for idx, row in matches_df.head(20).iterrows():
+        table.add_row(
+            str(idx + 1),
+            row.get('date', 'N/A'),
+            row.get('home_team', 'N/A'),
+            row.get('away_team', 'N/A'),
+            row.get('competition', row.get('league', 'N/A'))
+        )
+        
+    console.print(table)
+    
+    if len(matches_df) > 20:
+        console.print(f"\n[dim]... and {len(matches_df) - 20} more matches[/dim]")
+        
+    return Confirm.ask("\n[cyan]Do you want to proceed with these matches?[/cyan]", default=True)
+
+
+def update_raw_sources(console: Console, verbose: bool = False) -> Dict[str, Any]:
+    """
+    Update raw data sources (fixtures, etc.).
+    
+    Args:
+        console: Rich Console object
+        verbose: Enable verbose output
+        
+    Returns:
+        Dict with update status
+    """
+    console.print("\n[bold blue]Updating raw data sources...[/bold blue]")
+    
+    status = {
+        'success': True,
+        'messages': [],
+        'updated_files': []
+    }
+    
+    try:
+        from predicciones.scripts.fetch_daily_fixtures import fetch_fixtures_for_date, save_fixtures
+        from datetime import datetime, timedelta
+        
+        # Update today and next 3 days
+        for i in range(4):
+            date = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
+            try:
+                df = fetch_fixtures_for_date(date)
+                if len(df) > 0:
+                    path = save_fixtures(df, date)
+                    status['messages'].append(f"Updated fixtures for {date}: {len(df)} matches")
+                    status['updated_files'].append(str(path))
+                else:
+                    status['messages'].append(f"No fixtures found for {date}")
+            except Exception as e:
+                status['success'] = False
+                status['messages'].append(f"Error updating {date}: {str(e)}")
+                
+    except Exception as e:
+        status['success'] = False
+        status['messages'].append(f"Error updating raw sources: {str(e)}")
+        
+    for msg in status['messages']:
+        if "Error" in msg:
+            console.print(f"[red]{msg}[/red]")
+        else:
+            console.print(f"[green]✓ {msg}[/green]")
+            
+    return status
+
+
+def rebuild_derived_datasets(console: Console, verbose: bool = False) -> Dict[str, Any]:
+    """
+    Rebuild derived datasets (match events, player stats, etc.).
+    
+    Args:
+        console: Rich Console object
+        verbose: Enable verbose output
+        
+    Returns:
+        Dict with rebuild status
+    """
+    console.print("\n[bold blue]Rebuilding derived datasets...[/bold blue]")
+    
+    status = {
+        'success': True,
+        'messages': [],
+        'updated_files': []
+    }
+    
+    # Check if regeneration scripts exist
+    scripts_to_run = []
+    match_events_script = project_root / "predicciones" / "scripts" / "regenerate_match_events.py"
+    player_stats_script = project_root / "predicciones" / "scripts" / "regenerate_player_match_stats.py"
+    enrich_script = project_root / "predicciones" / "scripts" / "enrich_and_regenerate.py"
+    
+    if enrich_script.is_file():
+        scripts_to_run.append(("Enrich & Regenerate", enrich_script))
+    else:
+        if match_events_script.is_file():
+            scripts_to_run.append(("Match Events", match_events_script))
+        if player_stats_script.is_file():
+            scripts_to_run.append(("Player Stats", player_stats_script))
+            
+    if not scripts_to_run:
+        status['messages'].append("No derived dataset scripts found")
+        console.print("[yellow]No derived dataset scripts found[/yellow]")
+        return status
+        
+    for name, script_path in scripts_to_run:
+        try:
+            console.print(f"[dim]Running {name}...[/dim]")
+            
+            # Use subprocess to run the script
+            import subprocess
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                status['messages'].append(f"Successfully rebuilt {name}")
+                console.print(f"[green]✓ Successfully rebuilt {name}[/green]")
+                if verbose and result.stdout:
+                    console.print(f"[dim]{result.stdout}[/dim]")
+            else:
+                status['success'] = False
+                status['messages'].append(f"Error rebuilding {name}: {result.stderr}")
+                console.print(f"[red]✗ Error rebuilding {name}[/red]")
+                if verbose:
+                    console.print(f"[red]{result.stderr}[/red]")
+                    
+        except Exception as e:
+            status['success'] = False
+            status['messages'].append(f"Error running {name}: {str(e)}")
+            console.print(f"[red]✗ Error running {name}: {str(e)}[/red]")
+            
+    return status
+
+
+def detect_or_generate_daily_fixtures(
+    console: Console,
+    date_str: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Detect or generate fixtures for today or a specific date.
+    
+    Args:
+        console: Rich Console object
+        date_str: Optional date string
+        
+    Returns:
+        Dict with fixture status
+    """
+    from datetime import datetime
+    
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        
+    console.print(f"\n[bold blue]Detecting/generating fixtures for {date_str}...[/bold blue]")
+    
+    status = {
+        'success': True,
+        'messages': [],
+        'fixture_path': None,
+        'match_count': 0
+    }
+    
+    try:
+        from predicciones.scripts.fetch_daily_fixtures import fetch_fixtures_for_date, save_fixtures
+        
+        df = fetch_fixtures_for_date(date_str)
+        
+        if len(df) > 0:
+            path = save_fixtures(df, date_str)
+            status['fixture_path'] = str(path)
+            status['match_count'] = len(df)
+            status['messages'].append(f"Generated fixture file with {len(df)} matches")
+            console.print(f"[green]✓ Generated fixture file with {len(df)} matches: {path}[/green]")
+            
+            # Show preview
+            preview_fixture_selection(df, console)
+        else:
+            status['messages'].append(f"No fixtures found for {date_str}")
+            console.print(f"[yellow]No fixtures found for {date_str}[/yellow]")
+            
+    except Exception as e:
+        status['success'] = False
+        status['messages'].append(f"Error detecting/generating fixtures: {str(e)}")
+        console.print(f"[red]Error detecting/generating fixtures: {str(e)}[/red]")
+        
+    return status
+
+
+def run_full_daily_pipeline(
+    console: Console,
+    date_str: Optional[str] = None,
+    run_predictions: bool = False,
+    verbose: bool = False
+) -> Dict[str, Any]:
+    """
+    Run the full daily pipeline.
+    
+    Args:
+        console: Rich Console object
+        date_str: Optional date string
+        run_predictions: Whether to run predictions after pipeline
+        verbose: Enable verbose output
+        
+    Returns:
+        Dict with pipeline status
+    """
+    console.print("\n[bold blue]Running full daily pipeline...[/bold blue]")
+    
+    pipeline_status = {
+        'success': True,
+        'steps': {}
+    }
+    
+    # Step 1: Update raw sources
+    pipeline_status['steps']['raw_sources'] = update_raw_sources(console, verbose)
+    if not pipeline_status['steps']['raw_sources']['success']:
+        pipeline_status['success'] = False
+        
+    # Step 2: Rebuild derived datasets
+    pipeline_status['steps']['derived_datasets'] = rebuild_derived_datasets(console, verbose)
+    if not pipeline_status['steps']['derived_datasets']['success']:
+        pipeline_status['success'] = False
+        
+    # Step 3: Detect/generate daily fixtures
+    pipeline_status['steps']['fixtures'] = detect_or_generate_daily_fixtures(console, date_str)
+    if not pipeline_status['steps']['fixtures']['success']:
+        pipeline_status['success'] = False
+        
+    # Step 4: Run predictions if requested
+    if run_predictions and pipeline_status['steps']['fixtures']['fixture_path']:
+        console.print("\n[bold blue]Running predictions...[/bold blue]")
+        try:
+            predict_command(
+                pipeline_status['steps']['fixtures']['fixture_path'],
+                "output/predictions",
+                verbose,
+                date_str
+            )
+            pipeline_status['steps']['predictions'] = {'success': True}
+        except Exception as e:
+            pipeline_status['steps']['predictions'] = {'success': False, 'error': str(e)}
+            pipeline_status['success'] = False
+            console.print(f"[red]Error running predictions: {str(e)}[/red]")
+            
+    console.print("\n[bold green]✓ Full pipeline completed![/bold green]")
+    
+    return pipeline_status
 
 
 def choose_from_table(

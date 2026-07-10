@@ -85,16 +85,140 @@ class InteractiveMenu:
             self.console.print("\n[bold green]Goodbye![/bold green]")
     
     def _predict_menu(self) -> None:
-        """Predict from fixture file menu with guided selection."""
-        self.console.print("\n[bold]Predict Matches from Fixture File[/bold]")
+        """New Predict menu with auto-generated and existing fixture options."""
+        from predicciones.src.cli.commands import (
+            list_available_fixtures,
+            detect_available_matches,
+            build_fixture_file_from_matches,
+            preview_fixture_selection,
+            predict_command,
+        )
+        from datetime import datetime
         
-        # Import helper function
-        from predicciones.src.cli.commands import list_available_fixtures
-        
-        # First, show available fixtures
-        fixtures = list_available_fixtures()
-        
-        if fixtures:
+        while True:
+            self.console.print()
+            self.console.print(Panel(
+                "[bold]Predict Menu[/bold]\n"
+                "1. Predict from auto-generated fixtures\n"
+                "2. Predict from existing fixture file\n"
+                "B. Back\n"
+                "Q. Exit",
+                title="⚽ Predict",
+                border_style="blue"
+            ))
+            
+            choice = Prompt.ask("\n[cyan]Enter your choice[/cyan]", default="1").strip().lower()
+            
+            if choice == 'q':
+                self._exit_menu()
+                return
+            elif choice == 'b':
+                return
+            elif choice == '1':
+                # Auto-generated fixtures
+                self._predict_auto_generated()
+            elif choice == '2':
+                # Existing fixture file
+                self._predict_existing()
+            else:
+                self.console.print("[yellow]Invalid choice. Please try again.[/yellow]")
+
+    def _predict_auto_generated(self) -> None:
+        """Submenu for auto-generated fixture options."""
+        from predicciones.src.cli.commands import (
+            detect_available_matches,
+            build_fixture_file_from_matches,
+            preview_fixture_selection,
+            predict_command,
+        )
+        from datetime import datetime, timedelta
+
+        while True:
+            self.console.print()
+            self.console.print(Panel(
+                "[bold]Auto-generated Fixtures[/bold]\n"
+                "1. Today's fixtures\n"
+                "2. Upcoming fixtures (next 7 days)\n"
+                "3. Fixtures by competition\n"
+                "4. Fixtures by team\n"
+                "5. All available fixtures\n"
+                "B. Back\n"
+                "Q. Exit",
+                title="⚽ Auto Fixtures",
+                border_style="blue"
+            ))
+            
+            choice = Prompt.ask("\n[cyan]Enter your choice[/cyan]", default="1").strip().lower()
+            
+            if choice == 'q':
+                self._exit_menu()
+                return
+            elif choice == 'b':
+                return
+            elif choice == '1':
+                # Today's fixtures
+                today = datetime.now().strftime("%Y-%m-%d")
+                df = detect_available_matches(from_date=today, to_date=today)
+            elif choice == '2':
+                # Upcoming fixtures
+                today = datetime.now().strftime("%Y-%m-%d")
+                next_week = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+                df = detect_available_matches(from_date=today, to_date=next_week)
+            elif choice == '3':
+                # By competition
+                competition = Prompt.ask("[cyan]Enter competition name[/cyan]")
+                df = detect_available_matches(competition=competition)
+            elif choice == '4':
+                # By team
+                team = Prompt.ask("[cyan]Enter team name[/cyan]")
+                df = detect_available_matches(team=team)
+            elif choice == '5':
+                # All available fixtures
+                df = detect_available_matches()
+            else:
+                self.console.print("[yellow]Invalid choice. Please try again.[/yellow]")
+                continue
+
+            # Preview and confirm
+            if len(df) == 0:
+                self.console.print("[yellow]No matches found for this selection![/yellow]")
+                continue
+
+            if preview_fixture_selection(df, self.console):
+                # Build fixture file
+                fixture_path = build_fixture_file_from_matches(df)
+                self.console.print(f"[green]✓ Fixture file created at {fixture_path}[/green]")
+                
+                # Run predictions
+                output_dir = Prompt.ask(
+                    "[cyan]Output directory[/cyan]",
+                    default="output/predictions"
+                )
+                verbose = Confirm.ask(
+                    "[cyan]Enable verbose output?[/cyan]",
+                    default=False
+                )
+                
+                predict_command(str(fixture_path), output_dir, verbose)
+                return
+
+    def _predict_existing(self) -> None:
+        """Submenu for selecting existing fixture file."""
+        from predicciones.src.cli.commands import (
+            list_available_fixtures,
+            preview_fixture_selection,
+            predict_command,
+        )
+        import pandas as pd
+
+        while True:
+            fixtures = list_available_fixtures()
+            
+            if not fixtures:
+                self.console.print("\n[yellow]No fixture files found![/yellow]")
+                self.console.print("[dim]Try auto-generated fixtures instead.[/dim]")
+                return
+            
             self.console.print("\n[green]✓ Found available fixture files:[/green]")
             
             table = Table(title="Available Fixtures", show_header=True, header_style="bold magenta")
@@ -114,122 +238,108 @@ class InteractiveMenu:
                 )
             
             self.console.print(table)
+            self.console.print("\nB. Back\nQ. Exit")
             
             choice = Prompt.ask(
-                f"\n[cyan]Select fixture (1-{len(fixtures)}) or type custom path[/cyan]"
-            )
+                f"\n[cyan]Select fixture (1-{len(fixtures)})[/cyan]"
+            ).strip().lower()
+            
+            if choice == 'q':
+                self._exit_menu()
+                return
+            elif choice == 'b':
+                return
             
             try:
                 idx = int(choice) - 1
                 if 0 <= idx < len(fixtures):
                     fixture_path = fixtures[idx]['path']
+                    
+                    # Preview the fixture
+                    df = pd.read_csv(fixture_path)
+                    if preview_fixture_selection(df, self.console):
+                        # Run predictions
+                        output_dir = Prompt.ask(
+                            "[cyan]Output directory[/cyan]",
+                            default="output/predictions"
+                        )
+                        verbose = Confirm.ask(
+                            "[cyan]Enable verbose output?[/cyan]",
+                            default=False
+                        )
+                        predict_command(fixture_path, output_dir, verbose)
+                        return
                 else:
-                    fixture_path = choice
+                    self.console.print("[yellow]Invalid selection. Please try again.[/yellow]")
             except ValueError:
-                fixture_path = choice
-        else:
-            self.console.print("\n[yellow]No fixture files found in data/fixtures directories.[/yellow]")
-            fixture_path = Prompt.ask(
-                "[cyan]Enter path to fixture CSV file[/cyan]",
-                default="data/fixtures/test.csv"
-            )
-        
-        output_dir = Prompt.ask(
-            "[cyan]Output directory[/cyan]",
-            default="output/predictions"
-        )
-        
-        verbose = Confirm.ask(
-            "[cyan]Enable verbose output?[/cyan]",
-            default=False
-        )
-        
-        # Import and run command
-        from predicciones.src.cli.commands import predict_command
-        predict_command(fixture_path, output_dir, verbose)
+                self.console.print("[yellow]Please enter a valid number.[/yellow]")
     
     def _pipeline_menu(self) -> None:
-        """Daily pipeline menu with suggested dates from valid fixtures."""
-        self.console.print("\n[bold]Run Daily Pipeline[/bold]")
-        
-        # Import helpers
-        from predicciones.src.cli.commands import list_available_predictions, list_available_reports, list_available_fixtures, _is_valid_date_format
-        
-        # Get available dates from predictions, reports, AND fixtures
-        predictions = list_available_predictions()
-        reports = list_available_reports()
-        fixtures = list_available_fixtures()
-        
-        # Extract unique dates - only include valid date formats
-        available_dates = set()
-        for p in predictions:
-            date = p.get('date', '')
-            if _is_valid_date_format(date):
-                available_dates.add(date)
-        for r in reports:
-            date = r.get('date', '')
-            if _is_valid_date_format(date):
-                available_dates.add(date)
-        for f in fixtures:
-            date = f.get('date', '')
-            # Only add fixture dates that are valid YYYYMMDD format
-            # and have at least 1 match
-            if _is_valid_date_format(date) and f.get('matches', 0) > 0:
-                available_dates.add(date)
-        
-        available_dates = sorted([d for d in available_dates if d])
-        
-        if available_dates:
-            self.console.print(f"\n[green]✓ Found {len(available_dates)} dated fixture(s) with matches:[/green]")
-            for idx, date in enumerate(available_dates, 1):
-                self.console.print(f"  [cyan]{idx}.[/cyan] {date}")
-            
-            choice = Prompt.ask(
-                f"\n[cyan]Select date (1-{len(available_dates)}) or enter new date (YYYYMMDD)[/cyan]"
-            )
-            
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(available_dates):
-                    date = available_dates[idx]
-                else:
-                    date = choice
-            except ValueError:
-                date = choice
-        else:
-            # Suggest today's date or next match day
-            from datetime import datetime
-            suggested_date = datetime.now().strftime("%Y%m%d")
-            self.console.print(f"[dim]No dated fixtures found. Suggested: {suggested_date}[/dim]")
-            date = Prompt.ask(
-                "[cyan]Date to process (YYYYMMDD)[/cyan]",
-                default=suggested_date
-            )
-        
-        if not date:
-            self.console.print("[yellow]Date is required.[/yellow]")
-            return
-        
-        # Validate date format before proceeding
-        if not _is_valid_date_format(date):
-            self.console.print(f"\n[bold red]Invalid date format: {date}[/bold red]")
-            self.console.print("[red]Please enter a valid date in YYYYMMDD format (e.g., 20250715).[/red]")
-            self.console.print("[dim]Note: Labels like 'worldcup' are not valid dates.[/dim]")
-            return
-        
-        output_dir = Prompt.ask(
-            "[cyan]Output directory[/cyan]",
-            default="output/daily"
+        """New Daily Pipeline menu with multiple options."""
+        from predicciones.src.cli.commands import (
+            update_raw_sources,
+            rebuild_derived_datasets,
+            detect_or_generate_daily_fixtures,
+            run_full_daily_pipeline,
         )
+        from datetime import datetime
         
-        verbose = Confirm.ask(
-            "[cyan]Enable verbose output?[/cyan]",
-            default=False
-        )
-        
-        # Import and run command
-        from predicciones.src.cli.commands import pipeline_command
-        pipeline_command(date, output_dir, verbose)
+        while True:
+            self.console.print()
+            self.console.print(Panel(
+                "[bold]Daily Pipeline Menu[/bold]\n"
+                "1. Update raw data sources\n"
+                "2. Rebuild derived datasets\n"
+                "3. Detect/generate today fixtures\n"
+                "4. Run full daily pipeline\n"
+                "5. Run full daily pipeline + predictions\n"
+                "B. Back\n"
+                "Q. Exit",
+                title="⚽ Daily Pipeline",
+                border_style="blue"
+            ))
+            
+            choice = Prompt.ask("\n[cyan]Enter your choice[/cyan]", default="4").strip().lower()
+            
+            if choice == 'q':
+                self._exit_menu()
+                return
+            elif choice == 'b':
+                return
+            elif choice == '1':
+                verbose = Confirm.ask("[cyan]Enable verbose output?[/cyan]", default=False)
+                update_raw_sources(self.console, verbose)
+            elif choice == '2':
+                verbose = Confirm.ask("[cyan]Enable verbose output?[/cyan]", default=False)
+                rebuild_derived_datasets(self.console, verbose)
+            elif choice == '3':
+                date_str = Prompt.ask(
+                    "[cyan]Enter date (YYYY-MM-DD or YYYYMMDD, leave empty for today)[/cyan]",
+                    default=""
+                ).strip()
+                if not date_str:
+                    date_str = None
+                detect_or_generate_daily_fixtures(self.console, date_str)
+            elif choice == '4':
+                date_str = Prompt.ask(
+                    "[cyan]Enter date (YYYY-MM-DD or YYYYMMDD, leave empty for today)[/cyan]",
+                    default=""
+                ).strip()
+                if not date_str:
+                    date_str = None
+                verbose = Confirm.ask("[cyan]Enable verbose output?[/cyan]", default=False)
+                run_full_daily_pipeline(self.console, date_str, run_predictions=False, verbose=verbose)
+            elif choice == '5':
+                date_str = Prompt.ask(
+                    "[cyan]Enter date (YYYY-MM-DD or YYYYMMDD, leave empty for today)[/cyan]",
+                    default=""
+                ).strip()
+                if not date_str:
+                    date_str = None
+                verbose = Confirm.ask("[cyan]Enable verbose output?[/cyan]", default=False)
+                run_full_daily_pipeline(self.console, date_str, run_predictions=True, verbose=verbose)
+            else:
+                self.console.print("[yellow]Invalid choice. Please try again.[/yellow]")
     
     def _players_menu(self) -> None:
         """Player statistics menu with team selection from available data."""
