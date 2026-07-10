@@ -38,20 +38,21 @@ class InteractiveMenu:
             "Select an option:\n\n"
             "  [cyan]1.[/cyan] Predict (from fixture file)\n"
             "  [cyan]2.[/cyan] Run Daily Pipeline\n"
-            "  [cyan]3.[/cyan] Player Statistics\n"
-            "  [cyan]4.[/cyan] Match Timeline\n"
-            "  [cyan]5.[/cyan] View Fixtures\n"
-            "  [cyan]6.[/cyan] Generate Daily Report\n"
-            "  [cyan]7.[/cyan] Lambda Analysis\n"
-            "  [cyan]8.[/cyan] Backtest/Calibration\n"
-            "  [cyan]9.[/cyan] Recent Files\n"
-            "  [cyan]10.[/cyan] Configuration\n"
+            "  [cyan]3.[/cyan] Build Automatic Parlays\n"
+            "  [cyan]4.[/cyan] Player Statistics\n"
+            "  [cyan]5.[/cyan] Match Timeline\n"
+            "  [cyan]6.[/cyan] View Fixtures\n"
+            "  [cyan]7.[/cyan] Generate Daily Report\n"
+            "  [cyan]8.[/cyan] Lambda Analysis\n"
+            "  [cyan]9.[/cyan] Backtest/Calibration\n"
+            "  [cyan]10.[/cyan] Recent Files\n"
+            "  [cyan]11.[/cyan] Configuration\n"
             "  [cyan]0.[/cyan] Exit\n",
             title="⚽ Football Prediction System",
             border_style="blue",
         ))
         
-        choice = Prompt.ask("\n[cyan]Enter your choice[/cyan]", choices=[str(i) for i in range(11)], default="0")
+        choice = Prompt.ask("\n[cyan]Enter your choice[/cyan]", choices=[str(i) for i in range(12)], default="0")
         
         if choice == "0":
             self._exit_menu()
@@ -60,20 +61,23 @@ class InteractiveMenu:
         elif choice == "2":
             self._pipeline_menu()
         elif choice == "3":
-            self._players_menu()
+            from predicciones.src.cli.commands import run_parlay_builder
+            run_parlay_builder(self.console)
         elif choice == "4":
-            self._timelines_menu()
+            self._players_menu()
         elif choice == "5":
-            self._fixtures_menu()
+            self._timelines_menu()
         elif choice == "6":
-            self._daily_report_menu()
+            self._fixtures_menu()
         elif choice == "7":
-            self._lambda_analysis_menu()
+            self._daily_report_menu()
         elif choice == "8":
-            self._backtest_menu()
+            self._lambda_analysis_menu()
         elif choice == "9":
-            self._recent_files_menu()
+            self._backtest_menu()
         elif choice == "10":
+            self._recent_files_menu()
+        elif choice == "11":
             self._config_menu()
         else:
             self.console.print("[yellow]Invalid choice. Please try again.[/yellow]")

@@ -872,6 +872,63 @@ def run_full_daily_pipeline(
     return pipeline_status
 
 
+def run_parlay_builder(console: Console) -> None:
+    """
+    Run the automatic parlay builder using available fixtures and predictions.
+    """
+    from predicciones.src.models.parlay_builder import (
+        build_all_parlays,
+        render_parlay,
+        RiskLevel
+    )
+    from predicciones.src.pipeline.predict import predict_match_pipeline
+    
+    console.print("\n[bold blue]=== AUTOMATIC PARLAY BUILDER ===[/bold blue]\n")
+    
+    # Step 1: Load available fixtures
+    fixtures = list_available_fixtures()
+    if not fixtures:
+        console.print("[yellow]No fixtures available! Please run the pipeline first to get fixtures.[/yellow]")
+        return
+        
+    console.print(f"[green]Found {len(fixtures)} fixture(s). Generating predictions...[/green]\n")
+    
+    # Step 2: Generate predictions for all fixtures
+    match_predictions = []
+    for fixture in fixtures:
+        try:
+            fixture_path = fixture['path']
+            import pandas as pd
+            df = pd.read_csv(fixture_path)
+            if len(df) == 0:
+                continue
+                
+            for _, match in df.iterrows():
+                home_team = match['home_team']
+                away_team = match['away_team']
+                console.print(f"[dim]Predicting {home_team} vs {away_team}...[/dim]")
+                pred = predict_match_pipeline(
+                    home_team,
+                    away_team,
+                    include_markets=False
+                )
+                match_predictions.append(pred)
+        except Exception as e:
+            console.print(f"[yellow]Skipping fixture {fixture['date']}: {str(e)}[/yellow]")
+            
+    if not match_predictions:
+        console.print("[red]No valid match predictions available to build parlays.[/red]")
+        return
+        
+    # Step 3: Build all parlays
+    console.print(f"\n[green]Building parlays from {len(match_predictions)} match prediction(s)...[/green]\n")
+    parlays = build_all_parlays(match_predictions)
+    
+    # Step 4: Render each parlay
+    for risk_level in [RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH]:
+        render_parlay(parlays[risk_level], risk_level, console)
+
+
 def choose_from_table(
     console: Console,
     items: List[Dict[str, Any]],

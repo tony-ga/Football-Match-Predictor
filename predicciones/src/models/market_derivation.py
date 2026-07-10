@@ -57,6 +57,24 @@ def derive_1x2(matrix: np.ndarray) -> Dict[str, float]:
     }
 
 
+def derive_double_chance(one_x_two: Dict[str, float]) -> Dict[str, float]:
+    """
+    Derive Double Chance probabilities from 1X2 results.
+
+    P(Home or Draw) = P(Home) + P(Draw)
+    P(Away or Draw) = P(Away) + P(Draw)
+    P(Home or Away) = P(Home) + P(Away)
+
+    Returns:
+        Dict with 'home_or_draw', 'away_or_draw', 'home_or_away' probabilities.
+    """
+    return {
+        'home_or_draw': float(one_x_two['home'] + one_x_two['draw']),
+        'away_or_draw': float(one_x_two['away'] + one_x_two['draw']),
+        'home_or_away': float(one_x_two['home'] + one_x_two['away']),
+    }
+
+
 def derive_btts(matrix: np.ndarray) -> Dict[str, float]:
     """
     Derive Both Teams To Score (BTTS) probabilities.
@@ -356,6 +374,9 @@ def derive_all_markets(
 
     # 1X2
     markets['1x2'] = derive_1x2(matrix)
+    
+    # Double Chance
+    markets['double_chance'] = derive_double_chance(markets['1x2'])
 
     # BTTS
     markets['btts'] = derive_btts(matrix)
