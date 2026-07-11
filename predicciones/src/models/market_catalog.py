@@ -56,7 +56,7 @@ def build_market_catalog() -> Dict[str, MarketDefinition]:
     # RESULT
     add(MarketDefinition(
         market_key="1x2_home",
-        name="Home Win",
+        name="Local",
         family=MarketFamily.RESULT,
         calculation_source="poisson_matrix",
         risk_fit=[RiskProfile.HIGH],
@@ -64,7 +64,7 @@ def build_market_catalog() -> Dict[str, MarketDefinition]:
     ))
     add(MarketDefinition(
         market_key="1x2_draw",
-        name="Draw",
+        name="Empate",
         family=MarketFamily.RESULT,
         calculation_source="poisson_matrix",
         risk_fit=[RiskProfile.HIGH],
@@ -72,7 +72,7 @@ def build_market_catalog() -> Dict[str, MarketDefinition]:
     ))
     add(MarketDefinition(
         market_key="1x2_away",
-        name="Away Win",
+        name="Visitante",
         family=MarketFamily.RESULT,
         calculation_source="poisson_matrix",
         risk_fit=[RiskProfile.HIGH],

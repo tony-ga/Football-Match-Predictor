@@ -33,9 +33,9 @@ def _display_predictions_table(
     
     table = Table(title="📊 Match Predictions Summary", show_header=True, header_style="bold magenta")
     table.add_column("Match", style="cyan")
-    table.add_column("Home Win", justify="right")
-    table.add_column("Draw", justify="right")
-    table.add_column("Away Win", justify="right")
+    table.add_column("Local", justify="right")
+    table.add_column("Empate", justify="right")
+    table.add_column("Visitante", justify="right")
     table.add_column("BTTS Yes", justify="right")
     table.add_column("Over 2.5", justify="right")
     table.add_column("Exp Goals", justify="right")

@@ -705,9 +705,9 @@ def render_same_game_parlay_report(
     summary_table.add_column("", style="cyan")
     summary_table.add_column("", style="white")
     
-    summary_table.add_row("Home win", f"{markets['1x2']['home']:.1%}")
-    summary_table.add_row("Draw", f"{markets['1x2']['draw']:.1%}")
-    summary_table.add_row("Away win", f"{markets['1x2']['away']:.1%}")
+    summary_table.add_row(f"{home_team} victoria", f"{markets['1x2']['home']:.1%}")
+    summary_table.add_row("Empate", f"{markets['1x2']['draw']:.1%}")
+    summary_table.add_row(f"{away_team} victoria", f"{markets['1x2']['away']:.1%}")
     summary_table.add_row("Over 2.5", f"{markets['over_under']['over_2_5']:.1%}")
     summary_table.add_row("Under 2.5", f"{markets['over_under']['under_2_5']:.1%}")
     summary_table.add_row("BTTS Yes", f"{markets['btts']['yes']:.1%}")
