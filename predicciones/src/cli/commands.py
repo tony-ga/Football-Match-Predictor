@@ -22,6 +22,72 @@ from rich.prompt import Prompt, IntPrompt, Confirm
 
 console = Console()
 
+
+def _display_predictions_table(
+    console: Console, 
+    results: List[Dict[str, Any]], 
+    fixtures: pd.DataFrame
+) -> None:
+    """Display predictions in a formatted table in the terminal."""
+    from rich.table import Table
+    
+    table = Table(title="📊 Match Predictions Summary", show_header=True, header_style="bold magenta")
+    table.add_column("Match", style="cyan")
+    table.add_column("Home Win", justify="right")
+    table.add_column("Draw", justify="right")
+    table.add_column("Away Win", justify="right")
+    table.add_column("BTTS Yes", justify="right")
+    table.add_column("Over 2.5", justify="right")
+    table.add_column("Exp Goals", justify="right")
+    
+    for result in results:
+        home = result.get('home_team', 'Unknown')
+        away = result.get('away_team', 'Unknown')
+        match_name = f"{home} vs {away}"
+        
+        predictions = result.get('predictions', {})
+        
+        # Get 1X2 probabilities
+        x2_probs = predictions.get('1x2', {})
+        p_home = x2_probs.get('home', 0) * 100
+        p_draw = x2_probs.get('draw', 0) * 100
+        p_away = x2_probs.get('away', 0) * 100
+        
+        # Get BTTS probability
+        btts_probs = predictions.get('btts', {})
+        p_btts_yes = btts_probs.get('yes', 0) * 100
+        
+        # Get Over/Under probability
+        ou_probs = predictions.get('over_under', {})
+        p_over_25 = ou_probs.get('over_2_5', 0) * 100
+        
+        # Get expected goals
+        exp_goals = predictions.get('expected_goals', {}).get('total', 0)
+        
+        # Color code based on favorite
+        if p_home > p_away:
+            home_style = "green"
+            away_style = "white"
+        elif p_away > p_home:
+            home_style = "white"
+            away_style = "green"
+        else:
+            home_style = "yellow"
+            away_style = "yellow"
+        
+        table.add_row(
+            match_name,
+            f"[{home_style}]{p_home:.1f}%[/{home_style}]",
+            f"[yellow]{p_draw:.1f}%[/yellow]",
+            f"[{away_style}]{p_away:.1f}%[/{away_style}]",
+            f"{p_btts_yes:.1f}%",
+            f"{p_over_25:.1f}%",
+            f"{exp_goals:.2f}"
+        )
+    
+    console.print(table)
+
+
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -1021,39 +1087,6 @@ def run_parlay_builder(console: Console) -> None:
     
     # Step 6: Render the full report
     render_same_game_parlay_report(parlays, pred, home_team, away_team, calib_status, console)
-        
-    # Step 2: Display match selection menu
-    console.print("[bold]Select a match for Same Game Parlay Builder[/bold]\n")
-    match_options = [f"{i+1}. {home} vs {away}" for i, (home, away, _match_date) in enumerate(all_matches)]
-    for opt in match_options:
-        console.print(opt)
-    console.print("\n[b]B. Back[/b]  [red]Q. Exit[/red]")
-    
-    choice = Prompt.ask("\nEnter your choice", choices=[str(i+1) for i in range(len(all_matches))] + ["B", "Q"], default="B")
-    
-    if choice.upper() == "B":
-        return
-    if choice.upper() == "Q":
-        import sys
-        sys.exit(0)
-        
-    # Step 3: Get the selected match
-    match_idx = int(choice) - 1
-    home_team, away_team, match_date = all_matches[match_idx]
-    
-    # Step 4: Generate prediction for this match
-    console.print(f"\n[dim]Generating predictions for {home_team} vs {away_team}...[/dim]\n")
-    predict_kwargs = {"include_markets": False}
-    if isinstance(match_date, str) and match_date:
-        predict_kwargs["match_date"] = match_date
-    pred = predict_match_pipeline(home_team, away_team, **predict_kwargs)
-    
-    # Step 5: Check calibration status and build parlays
-    calib_status = check_calibration()
-    parlays, _ = build_all_same_game_parlays(pred, home_team, away_team, calib_status)
-    
-    # Step 6: Render the full report
-    render_same_game_parlay_report(parlays, pred, home_team, away_team, calib_status, console)
 
 
 def choose_from_table(
@@ -1238,10 +1271,19 @@ def predict_command(
             for idx, (r, fixture_row) in enumerate(zip(results, fixtures.itertuples(index=False))):
                 flat = {}
                 
-                # Add fixture metadata first (critical for identification)
+                # Add response metadata first to capture home_team/away_team from result
+                if 'home_team' in r:
+                    flat['home_team'] = r['home_team']
+                else:
+                    flat['home_team'] = fixture_row.home_team if hasattr(fixture_row, 'home_team') else (fixture_row[2] if len(fixture_row) > 2 else 'Unknown')
+                    
+                if 'away_team' in r:
+                    flat['away_team'] = r['away_team']
+                else:
+                    flat['away_team'] = fixture_row.away_team if hasattr(fixture_row, 'away_team') else (fixture_row[3] if len(fixture_row) > 3 else 'Unknown')
+                
+                # Add fixture metadata
                 flat['match_id'] = idx + 1
-                flat['home_team'] = fixture_row.home_team if hasattr(fixture_row, 'home_team') else fixture_row[2] if len(fixture_row) > 2 else 'Unknown'
-                flat['away_team'] = fixture_row.away_team if hasattr(fixture_row, 'away_team') else fixture_row[3] if len(fixture_row) > 3 else 'Unknown'
                 flat['competition'] = fixture_row.league if hasattr(fixture_row, 'league') else (fixture_row[1] if len(fixture_row) > 1 else 'N/A')
                 flat['date'] = fixture_row.date if hasattr(fixture_row, 'date') else (fixture_row[0] if len(fixture_row) > 0 else 'N/A')
                 flat['kickoff_datetime'] = fixture_row.kickoff_datetime if hasattr(fixture_row, 'kickoff_datetime') else (fixture_row[4] if len(fixture_row) > 4 else 'N/A')
@@ -1305,6 +1347,11 @@ def predict_command(
             df_results = df_results[final_columns]
             df_results.to_csv(output_file, index=False)
             console.print(f"\n[green]✓ Predictions saved to {output_file}[/green]")
+            
+            # Ask user if they want to view predictions in terminal
+            from rich.prompt import Confirm
+            if Confirm.ask("\n[cyan]Do you want to view the predictions in the terminal?[/cyan]", default=True):
+                _display_predictions_table(console, results, fixtures)
         else:
             console.print("[yellow]No predictions generated.[/yellow]")
             
