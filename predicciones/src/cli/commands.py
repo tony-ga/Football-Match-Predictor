@@ -904,6 +904,7 @@ def run_parlay_builder(console: Console) -> None:
     # Collect all matches from all fixtures
     all_matches = []
     import pandas as pd
+    selected_fixture = None
     for fixture in fixtures:
         try:
             fixture_path = fixture['path']
@@ -912,14 +913,20 @@ def run_parlay_builder(console: Console) -> None:
                 all_matches.append((
                     match['home_team'],
                     match['away_team'],
-                    match.get('date')
+                    match.get('date'),
+                    fixture  # Store fixture reference for later use
                 ))
+                if selected_fixture is None:
+                    selected_fixture = fixture
         except Exception as e:
             console.print(f"[yellow]Skipping fixture {fixture['date']}: {str(e)}[/yellow]")
             
     if not all_matches:
         console.print("[red]No valid matches found in fixtures.[/red]")
         return
+    
+    # Use the fixture of the first match by default, will be updated after selection
+    fixture = all_matches[0][3] if all_matches else fixtures[0]
     
     # Step 2: Let user choose a match
     console.print(f"\nFound {len(all_matches)} matches across {len(fixtures)} fixtures\n")
@@ -930,7 +937,7 @@ def run_parlay_builder(console: Console) -> None:
     match_table.add_column("Away Team")
     match_table.add_column("Date")
     
-    for i, (home, away, date) in enumerate(all_matches, 1):
+    for i, (home, away, date, _fixture_ref) in enumerate(all_matches, 1):
         match_table.add_row(str(i), home, away, str(date) if date else "-")
     
     console.print(match_table)
@@ -945,17 +952,22 @@ def run_parlay_builder(console: Console) -> None:
         return
     
     match_idx = int(choice) - 1
-    home_team, away_team, match_date = all_matches[match_idx]
+    home_team, away_team, match_date, selected_fixture = all_matches[match_idx]
     
     # Extract neutral_venue from the fixture row if available
     neutral_venue = False
     try:
-        fixture_path = fixture['path']
+        fixture_path = selected_fixture['path']
         df_fix = pd.read_csv(fixture_path)
         match_row = df_fix[(df_fix['home_team'] == home_team) & (df_fix['away_team'] == away_team)]
         if not match_row.empty and 'neutral_venue' in match_row.columns:
             nv_val = match_row['neutral_venue'].iloc[0]
             neutral_venue = bool(nv_val) if pd.notna(nv_val) else False
+        # For FIFA World Cup matches, default to neutral venue if not specified
+        if not neutral_venue:
+            competition = match_row['competition'].iloc[0] if not match_row.empty else ''
+            if 'world cup' in str(competition).lower():
+                neutral_venue = True
     except Exception:
         pass  # Default to False if we can't read the fixture
     

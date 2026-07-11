@@ -141,8 +141,11 @@ def _compute_form_factor(recent_form: Dict[str, Any]) -> float:
 
 def _compute_ranking_factor(fifa_rank: int, opponent_rank: int = None) -> float:
     """
-    Deriva ranking_factor del FIFA rank con efecto pequeño.
-    Top 10: 1.02-1.05, Top 20: 1.00-1.02, Resto: 0.95-1.00
+    Deriva ranking_factor del FIFA rank con efecto MÁS PRONUNCIADO.
+    Este factor debe contrarrestar cuando los datos de torneos simulados
+    dan ventajas injustificadas a equipos inferiormente rankeados.
+    
+    Top 5: 1.10-1.15, Top 10: 1.05-1.10, Top 20: 1.02-1.05, Resto: 0.90-1.00
     """
     if fifa_rank is None or fifa_rank == "N/A":
         return 1.0
@@ -152,18 +155,23 @@ def _compute_ranking_factor(fifa_rank: int, opponent_rank: int = None) -> float:
     except (ValueError, TypeError):
         return 1.0
     
+    # Ajuste más agresivo para reflejar diferencias de calidad real
     if rank <= 5:
-        factor = 1.05
+        factor = 1.12  # Elite teams get significant boost
     elif rank <= 10:
-        factor = 1.03
+        factor = 1.08
+    elif rank <= 15:
+        factor = 1.05
     elif rank <= 20:
-        factor = 1.01
+        factor = 1.03
     elif rank <= 30:
         factor = 1.00
+    elif rank <= 40:
+        factor = 0.97
     elif rank <= 50:
-        factor = 0.98
+        factor = 0.94
     else:
-        factor = 0.96
+        factor = 0.90  # Teams outside top 50 get penalized more
     
     return round(factor, 3)
 

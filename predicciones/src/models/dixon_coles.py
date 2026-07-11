@@ -476,13 +476,11 @@ class DixonColesModel:
         Heuristic lambda estimation from feature dicts.
 
         Formula:
-            lambda_home = attack_home * (1/defense_away) * form_home *
-                          ranking_home * h2h_home * squad_home *
-                          exp(home_adv + ctx_home)
+            lambda_home = base_lambda * (attack_home / defense_away) * 
+                          form_weight * ranking_weight * context_adjustment
 
-            lambda_away = attack_away * (1/defense_home) * form_away *
-                          ranking_away * h2h_away * squad_away *
-                          exp(ctx_away)
+            lambda_away = base_lambda * (attack_away / defense_home) * 
+                          form_weight * ranking_weight * context_adjustment
 
         SEMANTICS:
             - attack_rating: >1.0 means stronger than average attack
@@ -493,8 +491,17 @@ class DixonColesModel:
             - Low defense_rating → HIGH opponent lambda (easy to score against)
 
         This ensures the model can run without any training data.
+        
+        KEY ADJUSTMENT: Ranking factor has HIGHER weight than form factor
+        for international matches, because FIFA rankings reflect long-term
+        quality while small-sample tournament results can be noisy.
         """
         from ..features.ratings import LEAGUE_AVG_GOALS
+
+        # Weight configuration: ranking matters more than short-term form
+        # especially in international football with limited samples
+        RANKING_WEIGHT = 0.65  # 65% weight on ranking
+        FORM_WEIGHT = 0.35     # 35% weight on recent form
 
         # Home team lambda
         attack_h = home_features.get('attack_rating', 1.0)
@@ -510,10 +517,15 @@ class DixonColesModel:
         # So opponent_defense_factor = 1.0 / defense_rating
         # Add small epsilon to avoid division by zero
         defense_a_inverse = 1.0 / max(defense_a, 0.1)
+        
+        # Combine form and ranking with proper weighting
+        # Normalize form_factor around 1.0 (it ranges ~0.90-1.10)
+        # Normalize ranking_factor around 1.0 (it ranges ~0.90-1.12)
+        combined_quality_h = (ranking_h ** RANKING_WEIGHT) * (form_h ** FORM_WEIGHT)
 
         lambda_h = (
             attack_h * defense_a_inverse * LEAGUE_AVG_GOALS *
-            form_h * ranking_h * h2h_h * squad_h *
+            combined_quality_h * h2h_h * squad_h *
             np.exp(home_adv + ctx_h)
         )
 
@@ -528,10 +540,13 @@ class DixonColesModel:
 
         # INVERT opponent's defense
         defense_h_inverse = 1.0 / max(defense_h, 0.1)
+        
+        # Combine form and ranking with proper weighting
+        combined_quality_a = (ranking_a ** RANKING_WEIGHT) * (form_a ** FORM_WEIGHT)
 
         lambda_a = (
             attack_a * defense_h_inverse * LEAGUE_AVG_GOALS *
-            form_a * ranking_a * h2h_a * squad_a *
+            combined_quality_a * h2h_a * squad_a *
             np.exp(ctx_a)
         )
         
