@@ -101,7 +101,7 @@ class EspnWorldCupClient:
         
         return None
     
-    def get_scoreboard(self, dates: Optional[str] = None, limit: int = 200) -> Dict[str, Any]:
+    def get_scoreboard(self, dates: Optional[str] = None, limit: int = 200, **extra_params) -> Dict[str, Any]:
         """
         GET /scoreboard con params opcionales dates y limit.
         
@@ -116,6 +116,9 @@ class EspnWorldCupClient:
         params = {"limit": limit}
         if dates:
             params["dates"] = dates
+        for key, value in extra_params.items():
+            if value is not None:
+                params[key] = value
         
         result = self._make_request(url, params)
         return result if result else {}
@@ -263,8 +266,8 @@ class EspnWorldCupClient:
         stage = "group"  # default
         stage_lower = f"{season_slug} {week} {notes} {short_detail}".lower()
         
-        if "final" in stage_lower and "semi" not in stage_lower:
-            stage = "final"
+        if "third" in stage_lower or "tercer" in stage_lower:
+            stage = "third_place"
         elif "semi" in stage_lower:
             stage = "semi_final"
         elif "quarter" in stage_lower or "cuartos" in stage_lower:
@@ -273,8 +276,8 @@ class EspnWorldCupClient:
             stage = "round_of_16"
         elif "round of 32" in stage_lower:
             stage = "round_of_32"
-        elif "third" in stage_lower or "tercer" in stage_lower:
-            stage = "third_place"
+        elif "final" in stage_lower:
+            stage = "final"
         
         # Stats desde scoreboard (si existen)
         stats = self._extract_stats_from_competition(comp)
@@ -533,7 +536,7 @@ class EspnWorldCupClient:
                 return None
         return None
     
-    def get_world_cup_matches(self, dates: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
+    def get_world_cup_matches(self, dates: Optional[str] = None, limit: int = 200, season_type: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Devuelve todos los partidos normalizados del scoreboard.
         
@@ -544,7 +547,10 @@ class EspnWorldCupClient:
         Returns:
             Lista de dicts normalizados.
         """
-        scoreboard = self.get_scoreboard(dates=dates, limit=limit)
+        extra_params = {}
+        if season_type is not None:
+            extra_params["seasontype.seasontype"] = season_type
+        scoreboard = self.get_scoreboard(dates=dates, limit=limit, **extra_params)
         events = scoreboard.get("events", [])
         
         normalized = []

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import re
 import secrets
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -24,21 +28,22 @@ from telegram.ext import (
 project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root))
 
-from predicciones.src.models.parlay_builder import RiskLevel, build_all_same_game_parlays, check_calibration  # noqa: E402
+from predicciones.src.models.parlay_builder import build_all_same_game_parlays, check_calibration  # noqa: E402
 from predicciones.src.pipeline.predict import predict_match_pipeline  # noqa: E402
 from predicciones.src.telegram_integration import (  # noqa: E402
     available_competitions,
-    available_team_names,
+    build_match_items,
+    build_stage_items,
     format_parlay_text,
+    format_match_analysis_text,
     format_player_detail,
-    format_player_team_summary,
     format_prediction_text,
     format_timeline_text,
     get_competition_teams_and_matches,
-    get_matches_for_competition,
     get_player_rows_for_team,
-    get_team_matches,
     load_calibration_manager,
+    load_worldcup_matches,
+    _stage_title,
     split_telegram_message,
 )
 from predicciones.src.utils.team_normalization import normalize_team_name  # noqa: E402
@@ -52,15 +57,19 @@ logger = logging.getLogger(__name__)
 ROOT, PICK = range(2)
 PAGE_SIZE = 6
 REPORT_LIMIT = 3900
+LOCAL_DERIVED_DIR = project_root / "data" / "derived"
+LOCAL_TEAM_STATS_PATH = LOCAL_DERIVED_DIR / "team_match_stats.jsonl"
+WORLD_CUP_BRACKET_URL = "https://www.espn.com/soccer/bracket/_/season/2026/league/fifa.world?xhr=1"
 
 
 def main_menu_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Prediccion", callback_data="menu|prediction")],
-            [InlineKeyboardButton("Generar Parlay", callback_data="menu|parlay")],
-            [InlineKeyboardButton("Time lines de partidos", callback_data="menu|timelines")],
-            [InlineKeyboardButton("Datos de jugadores", callback_data="menu|players")],
+            [InlineKeyboardButton("🔮 Prediccion", callback_data="menu|prediction")],
+            [InlineKeyboardButton("🧩 Generar Parlay", callback_data="menu|parlay")],
+            [InlineKeyboardButton("⏱️ Time lines de partidos", callback_data="menu|timelines")],
+            [InlineKeyboardButton("📊 Analisis de Partidos", callback_data="menu|analysis")],
+            [InlineKeyboardButton("👤 Datos de jugadores", callback_data="menu|players")],
         ]
     )
 
@@ -68,8 +77,8 @@ def main_menu_markup() -> InlineKeyboardMarkup:
 def navigation_markup() -> List[List[InlineKeyboardButton]]:
     return [
         [
-            InlineKeyboardButton("Volver", callback_data="nav|back"),
-            InlineKeyboardButton("Menu principal", callback_data="nav|menu"),
+            InlineKeyboardButton("↩️ Volver al menú", callback_data="nav|back"),
+            InlineKeyboardButton("🏠 Menú principal", callback_data="nav|menu"),
             InlineKeyboardButton("Cancelar", callback_data="nav|cancel"),
         ]
     ]
@@ -203,15 +212,204 @@ def _build_team_items(competition: str) -> List[Dict[str, Any]]:
     return [{"label": team, "value": team} for team in teams]
 
 
-def _build_match_items(competition: str) -> List[Dict[str, Any]]:
-    matches = get_matches_for_competition(competition)
-    items: List[Dict[str, Any]] = []
-    for idx, match in enumerate(matches):
-        label = f"{match.home_team} vs {match.away_team}"
-        if match.date:
-            label += f" | {match.date[:10]}"
-        items.append({"label": label, "value": idx, "match": match})
-    return items
+def _build_match_items_for_flow(stage: str, status: str, days_back: int, days_forward: int) -> List[Dict[str, Any]]:
+    matches = load_worldcup_matches(
+        stage=stage if stage else None,
+        status=status if status else None,
+        days_back=days_back,
+        days_forward=days_forward,
+    )
+    if stage in {"round_of_32", "round_of_16"}:
+        bracket_matches = _build_bracket_worldcup_matches(stage=stage, status=status)
+        if bracket_matches:
+            matches = bracket_matches
+    if not matches and stage in {"round_of_32", "round_of_16"}:
+        matches = _build_local_worldcup_matches(stage=stage, status=status)
+    return build_match_items(matches)
+
+
+@lru_cache(maxsize=1)
+def _load_local_team_stats_rows() -> tuple[Dict[str, Any], ...]:
+    if not LOCAL_TEAM_STATS_PATH.exists():
+        return tuple()
+    rows: List[Dict[str, Any]] = []
+    with LOCAL_TEAM_STATS_PATH.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return tuple(rows)
+
+
+@lru_cache(maxsize=128)
+def _load_espn_summary(event_id: str) -> Dict[str, Any]:
+    from predicciones.src.data.espn_client import EspnWorldCupClient
+
+    return EspnWorldCupClient(timeout=15).get_summary(event_id)
+
+
+@lru_cache(maxsize=1)
+def _load_bracket_event_ids() -> tuple[str, ...]:
+    try:
+        response = requests.get(
+            WORLD_CUP_BRACKET_URL,
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"},
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("bracket_fetch_failed error=%s", exc)
+        return tuple()
+
+    ids = sorted(set(re.findall(r'/soccer/match/_/gameId/(\d+)/', response.text)))
+    return tuple(ids)
+
+
+def _infer_stage_from_summary(summary: Dict[str, Any]) -> str:
+    header = summary.get("header", {}) if isinstance(summary, dict) else {}
+    competitions = header.get("competitions", []) if isinstance(header, dict) else []
+    if not competitions:
+        return ""
+    alt_note = str(competitions[0].get("altGameNote") or "").lower()
+    if "round of 32" in alt_note:
+        return "round_of_32"
+    if "round of 16" in alt_note:
+        return "round_of_16"
+    if "quarterfinal" in alt_note:
+        return "quarter_final"
+    if "semifinal" in alt_note:
+        return "semi_final"
+    if "third place" in alt_note:
+        return "third_place"
+    if "final" in alt_note:
+        return "final"
+    if "group" in alt_note:
+        return "group"
+    return ""
+
+
+def _build_local_worldcup_matches(*, stage: str, status: str) -> List[Dict[str, Any]]:
+    rows = _load_local_team_stats_rows()
+    filtered: List[Dict[str, Any]] = []
+    status_lower = status.lower().strip() if status else ""
+
+    for row in rows:
+        event_id = str(row.get("event_id") or "").strip()
+        if not event_id or int(event_id) < 760500:
+            continue
+
+        summary = _load_espn_summary(event_id)
+        if not summary:
+            continue
+
+        inferred_stage = _infer_stage_from_summary(summary)
+        if stage and inferred_stage != stage:
+            continue
+
+        row_status = str(row.get("status") or "").lower().strip()
+        if status_lower and status_lower not in {row_status, "post", "completed"}:
+            continue
+
+        filtered.append(
+            {
+                "event_id": event_id,
+                "date": str(row.get("date") or ""),
+                "competition": str(row.get("competition") or "FIFA World Cup"),
+                "stage": inferred_stage or stage,
+                "status": "post" if row_status in {"completed", "post"} else row_status,
+                "completed": True,
+                "neutral_venue": bool(row.get("neutral_venue", False)),
+                "venue": row.get("venue"),
+                "home_team": str(row.get("home_team") or ""),
+                "away_team": str(row.get("away_team") or ""),
+                "home_score": row.get("home_score"),
+                "away_score": row.get("away_score"),
+                "stats": {
+                    "home_shots": row.get("home_shots"),
+                    "away_shots": row.get("away_shots"),
+                    "home_shots_on_target": row.get("home_shots_on_target"),
+                    "away_shots_on_target": row.get("away_shots_on_target"),
+                    "home_possession": row.get("home_possession"),
+                    "away_possession": row.get("away_possession"),
+                    "home_corners": row.get("home_corners"),
+                    "away_corners": row.get("away_corners"),
+                    "home_fouls": row.get("home_fouls"),
+                    "away_fouls": row.get("away_fouls"),
+                },
+            }
+        )
+
+    filtered.sort(key=lambda m: (str(m.get("date") or ""), str(m.get("home_team") or ""), str(m.get("away_team") or "")))
+    return filtered
+
+
+def _build_bracket_worldcup_matches(*, stage: str, status: str) -> List[Dict[str, Any]]:
+    stage_lower = stage.lower().strip() if stage else ""
+    status_lower = status.lower().strip() if status else ""
+    matches: List[Dict[str, Any]] = []
+
+    for event_id in _load_bracket_event_ids():
+        summary = _load_espn_summary(event_id)
+        if not summary:
+            continue
+
+        inferred_stage = _infer_stage_from_summary(summary)
+        if stage_lower and inferred_stage != stage_lower:
+            continue
+
+        header = summary.get("header", {}) if isinstance(summary, dict) else {}
+        competitions = header.get("competitions", []) if isinstance(header, dict) else []
+        if not competitions:
+            continue
+
+        competition = competitions[0]
+        status_info = competition.get("status", {})
+        status_type = status_info.get("type", {}) if isinstance(status_info, dict) else {}
+        normalized_status = str(status_type.get("state") or "").lower()
+        if not normalized_status and bool(status_type.get("completed")):
+            normalized_status = "post"
+        if status_lower and status_lower not in {normalized_status, "post", "completed"}:
+            continue
+
+        competitors = competition.get("competitors", [])
+        if len(competitors) < 2:
+            continue
+
+        home = competitors[0]
+        away = competitors[1]
+        venue_info = summary.get("gameInfo", {}).get("venue", {}) if isinstance(summary, dict) else {}
+        venue_name = ""
+        if isinstance(venue_info, dict):
+            venue_name = venue_info.get("fullName") or venue_info.get("address", {}).get("city") or ""
+
+        matches.append(
+            {
+                "event_id": str(event_id),
+                "date": str(competition.get("date") or header.get("date") or ""),
+                "competition": str((header.get("league") or {}).get("name") or "FIFA World Cup"),
+                "stage": inferred_stage or stage_lower,
+                "status": normalized_status or "post",
+                "completed": bool(status_type.get("completed", True)),
+                "neutral_venue": bool(competition.get("neutralSite", False)),
+                "venue": venue_name,
+                "home_team": str(home.get("team", {}).get("displayName") or home.get("team", {}).get("name") or ""),
+                "away_team": str(away.get("team", {}).get("displayName") or away.get("team", {}).get("name") or ""),
+                "home_score": int(home.get("score")) if str(home.get("score") or "").isdigit() else None,
+                "away_score": int(away.get("score")) if str(away.get("score") or "").isdigit() else None,
+                "home_winner": bool(home.get("winner")) if home.get("winner") is not None else None,
+                "away_winner": bool(away.get("winner")) if away.get("winner") is not None else None,
+            }
+        )
+
+    matches.sort(key=lambda m: (str(m.get("date") or ""), str(m.get("home_team") or ""), str(m.get("away_team") or "")))
+    return matches
+
+
+def _build_stage_items_for_flow() -> List[Dict[str, Any]]:
+    return build_stage_items()
 
 
 def _build_player_items(team: str) -> List[Dict[str, Any]]:
@@ -252,7 +450,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "/menu - abre el menú principal\n"
         "/help - esta ayuda\n"
         "/cancel - cancela el flujo actual\n\n"
-        "El bot usa estado en memoria por chat; si se reinicia el proceso o expira la conversación, vuelve a usar /start.",
+        "El bot usa estado en memoria por chat; si se reinicia el proceso o expira la conversación, vuelve a usar /start.\n"
+        "Prediccion, Parlay, Timeline y Analisis se navegan por fase del torneo y luego por partido.",
         reply_markup=main_menu_markup(),
     )
     return ROOT
@@ -277,42 +476,31 @@ async def unexpected_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def _handle_main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, choice: str) -> int:
     logger.info("option=%s chat=%s", choice, update.effective_chat.id if update.effective_chat else None)
     _clear_state(context)
-    picker = _get_picker_state(context)
-    if choice == "prediction":
-        competitions = _build_competition_items()
-        if not competitions:
-            return await _show_main_menu(update, context, "No encontré competiciones disponibles.")
+    if choice in {"prediction", "parlay", "timelines", "analysis"}:
+        flow_titles = {
+            "prediction": "🔮 Prediccion",
+            "parlay": "🧩 Generar Parlay",
+            "timelines": "⏱️ Time lines de partidos",
+            "analysis": "📊 Analisis de Partidos",
+        }
+        flow_subtitles = {
+            "prediction": "Selecciona la fase del torneo:",
+            "parlay": "Selecciona la fase del torneo:",
+            "timelines": "Selecciona la fase del torneo:",
+            "analysis": "Selecciona la fase del torneo:",
+        }
         _set_picker(
             context,
-            flow="prediction",
-            step="competition",
-            title="Prediccion",
-            subtitle="Selecciona una liga/competicion:",
-            items=competitions,
-        )
-    elif choice == "parlay":
-        competitions = _build_competition_items()
-        if not competitions:
-            return await _show_main_menu(update, context, "No encontré competiciones disponibles.")
-        _set_picker(
-            context,
-            flow="parlay",
-            step="competition",
-            title="Generar Parlay",
-            subtitle="Selecciona una liga/competicion:",
-            items=competitions,
-        )
-    elif choice == "timelines":
-        competitions = _build_competition_items()
-        if not competitions:
-            return await _show_main_menu(update, context, "No encontré competiciones disponibles.")
-        _set_picker(
-            context,
-            flow="timelines",
-            step="competition",
-            title="Time lines de partidos",
-            subtitle="Selecciona una liga/competicion:",
-            items=competitions,
+            flow=choice,
+            step="stage",
+            title=flow_titles[choice],
+            subtitle=flow_subtitles[choice],
+            items=build_stage_items(),
+            meta={
+                "status": "pre" if choice in {"prediction", "parlay"} else "post",
+                "days_back": 0 if choice in {"prediction", "parlay"} else 365,
+                "days_forward": 7 if choice in {"prediction", "parlay"} else 0,
+            },
         )
     elif choice == "players":
         competitions = _build_competition_items()
@@ -322,7 +510,7 @@ async def _handle_main_menu_choice(update: Update, context: ContextTypes.DEFAULT
             context,
             flow="players",
             step="competition",
-            title="Datos de jugadores",
+            title="👤 Datos de jugadores",
             subtitle="Selecciona una liga/competicion:",
             items=competitions,
         )
@@ -344,10 +532,23 @@ async def _go_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     flow = picker.get("flow")
     step = picker.get("step")
 
-    if flow and step == "competition":
+    if flow and step == "stage":
         return await _show_main_menu(update, context, "Menú principal:")
 
-    if flow in {"prediction", "parlay", "timelines", "players"} and step in {"team", "match", "player", "risk", "confirm"}:
+    if flow in {"prediction", "parlay", "timelines", "analysis"} and step == "match":
+        meta = picker.get("meta", {})
+        _set_picker(
+            context,
+            flow=flow,
+            step="stage",
+            title=picker.get("title", "Seleccion"),
+            subtitle="Selecciona la fase del torneo:",
+            items=_build_stage_items_for_flow(),
+            meta=meta,
+        )
+        return await _render_picker(update, context)
+
+    if flow in {"prediction", "parlay", "timelines", "players"} and step in {"team", "player", "confirm"}:
         competition = picker.get("meta", {}).get("competition", "")
         if not competition:
             return await _show_main_menu(update, context, "Menú principal:")
@@ -376,123 +577,84 @@ async def _handle_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, index
     meta = dict(picker.get("meta") or {})
     logger.info("pick flow=%s step=%s index=%s chat=%s", flow, step, index, update.effective_chat.id if update.effective_chat else None)
 
-    if flow == "prediction" and step == "competition":
-        competition = item["value"]
-        teams = _build_team_items(competition)
-        if not teams:
-            await update.callback_query.message.reply_text("No encontré equipos para esa competicion.")
-            return await _show_main_menu(update, context, "Volviendo al menú principal.")
-        _set_picker(
-            context,
-            flow="prediction",
-            step="home",
-            title="Prediccion",
-            subtitle=f"Liga: {competition}\nSelecciona el equipo local:",
-            items=teams,
-            meta={"competition": competition},
+    if flow in {"prediction", "parlay", "timelines", "analysis"} and step == "stage":
+        stage = item["value"]
+        status = str(meta.get("status") or "")
+        days_back = int(meta.get("days_back") or 0)
+        days_forward = int(meta.get("days_forward") or 0)
+        matches = await asyncio.to_thread(
+            _build_match_items_for_flow,
+            stage,
+            status,
+            days_back,
+            days_forward,
         )
-        return await _render_picker(update, context)
-
-    if flow == "prediction" and step == "home":
-        competition = meta.get("competition", "")
-        home = item["value"]
-        teams = [team for team in _build_team_items(competition) if team["value"] != home]
-        _set_picker(
-            context,
-            flow="prediction",
-            step="away",
-            title="Prediccion",
-            subtitle=f"Liga: {competition}\nLocal: {home}\nSelecciona el visitante:",
-            items=teams,
-            meta={"competition": competition, "home_team": home},
-        )
-        return await _render_picker(update, context)
-
-    if flow == "prediction" and step == "away":
-        competition = meta.get("competition", "")
-        home = meta.get("home_team", "")
-        away = item["value"]
-        _set_picker(
-            context,
-            flow="prediction",
-            step="confirm",
-            title="Prediccion",
-            subtitle=f"Confirmar:\n{competition}\n{home} vs {away}",
-            items=[{"label": "Confirmar prediccion", "value": "confirm"}],
-            meta={"competition": competition, "home_team": home, "away_team": away},
-        )
-        keyboard = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("Confirmar", callback_data="act|confirm")],
-                [InlineKeyboardButton("Volver", callback_data="nav|back"), InlineKeyboardButton("Menu principal", callback_data="nav|menu")],
-                [InlineKeyboardButton("Cancelar", callback_data="nav|cancel")],
-            ]
-        )
-        if update.callback_query:
-            await update.callback_query.message.edit_text(
-                _format_picker_title("Prediccion", f"Confirmar:\n{competition}\n{home} vs {away}", [], 0),
-                reply_markup=keyboard,
-            )
-        return PICK
-
-    if flow == "parlay" and step == "competition":
-        competition = item["value"]
-        matches = _build_match_items(competition)
         if not matches:
-            await update.callback_query.message.reply_text("No encontré partidos para esa competicion.")
-            return await _show_main_menu(update, context, "Volviendo al menú principal.")
+            await update.callback_query.message.reply_text(
+                "No encontré partidos para esa fase en la ventana actual. Prueba otra fase.",
+            )
+            return PICK
         _set_picker(
             context,
-            flow="parlay",
+            flow=flow,
             step="match",
-            title="Generar Parlay",
-            subtitle=f"Liga: {competition}\nSelecciona el partido:",
+            title={
+                "prediction": "🔮 Prediccion",
+                "parlay": "🧩 Generar Parlay",
+                "timelines": "⏱️ Time lines de partidos",
+                "analysis": "📊 Analisis de Partidos",
+            }[flow],
+            subtitle=f"Fase: {_stage_title(stage)}\nSelecciona un partido:",
             items=matches,
-            meta={"competition": competition},
-        )
-        return await _render_picker(update, context)
-
-    if flow == "parlay" and step == "match":
-        competition = meta.get("competition", "")
-        match = get_matches_for_competition(competition)[index]
-        _set_picker(
-            context,
-            flow="parlay",
-            step="risk",
-            title="Generar Parlay",
-            subtitle=f"{match.home_team} vs {match.away_team}\nElige el riesgo:",
-            items=[
-                {"label": "Bajo", "value": "low"},
-                {"label": "Medio", "value": "medium"},
-                {"label": "Alto", "value": "high"},
-                {"label": "Ver todo", "value": "all"},
-            ],
             meta={
-                "competition": competition,
-                "home_team": match.home_team,
-                "away_team": match.away_team,
-                "match_date": match.date or None,
-                "neutral_venue": match.neutral_venue,
+                **meta,
+                "stage": stage,
+                "matches": matches,
             },
         )
         return await _render_picker(update, context)
 
-    if flow == "parlay" and step == "risk":
-        competition = meta.get("competition", "")
-        home = meta.get("home_team", "")
-        away = meta.get("away_team", "")
-        selected_risk = item["value"]
+    if flow == "prediction" and step == "match":
+        match = item.get("match") or {}
+        home = str(match.get("home_team") or "")
+        away = str(match.get("away_team") or "")
+        competition = str(match.get("competition") or "FIFA World Cup")
+        await update.callback_query.message.edit_text("Generando prediccion...")
+        try:
+            response = await asyncio.to_thread(
+                predict_match_pipeline,
+                home,
+                away,
+                match.get("date"),
+                bool(match.get("neutral_venue", False)),
+                True,
+                competition,
+                "fifa.world",
+            )
+            text = format_prediction_text(response)
+            await _send_report(context.bot, update.effective_chat.id, "Prediccion", text)
+        except Exception as exc:
+            logger.exception("prediction_error chat=%s", update.effective_chat.id if update.effective_chat else None)
+            await update.callback_query.message.reply_text(f"Error generando la prediccion: {exc}")
+        await _send_menu_after_report(context.bot, update.effective_chat.id)
+        return ROOT
+
+    if flow == "parlay" and step == "match":
+        match = item.get("match") or {}
+        home = str(match.get("home_team") or "")
+        away = str(match.get("away_team") or "")
+        competition = str(match.get("competition") or "FIFA World Cup")
         await update.callback_query.message.edit_text("Generando parlay...")
         try:
             pred = await asyncio.to_thread(
                 predict_match_pipeline,
                 home,
                 away,
-                meta.get("match_date"),
-                meta.get("neutral_venue", False),
-                False,
+                match.get("date"),
+                bool(match.get("neutral_venue", False)),
+                True,
                 competition,
-                competition,
+                "fifa.world",
             )
             calib_manager = await asyncio.to_thread(load_calibration_manager)
             calib_status = check_calibration()
@@ -504,7 +666,7 @@ async def _handle_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, index
                 calib_status,
                 calib_manager if calib_manager.calibrators else None,
             )
-            text = format_parlay_text(home, away, pred, parlays, selected_risk if selected_risk != "all" else None)
+            text = format_parlay_text(home, away, pred, parlays)
             await _send_report(context.bot, update.effective_chat.id, "Generar Parlay", text)
         except Exception as exc:
             logger.exception("parlay_error chat=%s", update.effective_chat.id if update.effective_chat else None)
@@ -512,60 +674,36 @@ async def _handle_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, index
         await _send_menu_after_report(context.bot, update.effective_chat.id)
         return ROOT
 
-    if flow == "timelines" and step == "competition":
-        competition = item["value"]
-        teams = _build_team_items(competition)
-        if not teams:
-            await update.callback_query.message.reply_text("No encontré equipos para esa competicion.")
-            return await _show_main_menu(update, context, "Volviendo al menú principal.")
-        _set_picker(
-            context,
-            flow="timelines",
-            step="team",
-            title="Time lines de partidos",
-            subtitle=f"Liga: {competition}\nSelecciona el equipo:",
-            items=teams,
-            meta={"competition": competition},
-        )
-        return await _render_picker(update, context)
-
-    if flow == "timelines" and step == "team":
-        competition = meta.get("competition", "")
-        team = item["value"]
-        matches = [
-            m for m in get_team_matches(team)
-            if competition.lower() in str(m.get("competition") or "").lower()
-        ]
-        match_items = []
-        for idx, match in enumerate(matches):
-            label = f"{match.get('home_team', 'Home')} vs {match.get('away_team', 'Away')}"
-            if match.get("date"):
-                label += f" | {str(match.get('date'))[:10]}"
-            match_items.append({"label": label, "value": idx})
-        _set_picker(
-            context,
-            flow="timelines",
-            step="match",
-            title="Time lines de partidos",
-            subtitle=f"{competition}\nEquipo: {team}\nSelecciona el partido:",
-            items=match_items,
-            meta={"competition": competition, "team": team, "matches": matches},
-        )
-        return await _render_picker(update, context)
-
     if flow == "timelines" and step == "match":
-        matches = meta.get("matches") or []
-        if index >= len(matches):
-            await update.callback_query.answer("Partido invalido.", show_alert=False)
-            return PICK
-        match = matches[index]
+        match = item.get("match") or {}
         await update.callback_query.message.edit_text("Generando timeline...")
         try:
-            text = await asyncio.to_thread(format_timeline_text, meta.get("team", ""), match)
+            text = await asyncio.to_thread(format_timeline_text, "", match)
             await _send_report(context.bot, update.effective_chat.id, "Time lines de partidos", text)
         except Exception as exc:
             logger.exception("timeline_error chat=%s", update.effective_chat.id if update.effective_chat else None)
             await update.callback_query.message.reply_text(f"Error generando timeline: {exc}")
+        await _send_menu_after_report(context.bot, update.effective_chat.id)
+        return ROOT
+
+    if flow == "analysis" and step == "match":
+        match = item.get("match") or {}
+        event_id = str(match.get("event_id") or "")
+        if not event_id:
+            await update.callback_query.message.reply_text("No pude recuperar el evento del partido.")
+            return await _show_main_menu(update, context, "Volviendo al menú principal.")
+        await update.callback_query.message.edit_text("Generando análisis...")
+        try:
+            from predicciones.src.data.espn_client import EspnWorldCupClient
+
+            summary = await asyncio.to_thread(EspnWorldCupClient(timeout=15).get_summary, event_id)
+            if not summary:
+                raise RuntimeError("ESPN no devolvió resumen para este partido")
+            text = await asyncio.to_thread(format_match_analysis_text, match, summary)
+            await _send_report(context.bot, update.effective_chat.id, "Analisis de Partidos", text)
+        except Exception as exc:
+            logger.exception("analysis_error chat=%s", update.effective_chat.id if update.effective_chat else None)
+            await update.callback_query.message.reply_text(f"Error generando el analisis: {exc}")
         await _send_menu_after_report(context.bot, update.effective_chat.id)
         return ROOT
 
@@ -579,7 +717,7 @@ async def _handle_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, index
             context,
             flow="players",
             step="team",
-            title="Datos de jugadores",
+            title="👤 Datos de jugadores",
             subtitle=f"Liga: {competition}\nSelecciona el equipo:",
             items=teams,
             meta={"competition": competition},
@@ -598,7 +736,7 @@ async def _handle_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, index
             context,
             flow="players",
             step="player",
-            title="Datos de jugadores",
+            title="👤 Datos de jugadores",
             subtitle=f"{competition}\nEquipo: {team}\nSelecciona el jugador:",
             items=players,
             meta={"competition": competition, "team": team},
@@ -641,9 +779,9 @@ async def _handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE, act
                 away,
                 None,
                 False,
-                False,
+                True,
                 competition,
-                competition,
+                "fifa.world",
             )
             text = format_prediction_text(response)
             await _send_report(context.bot, update.effective_chat.id, "Prediccion", text)

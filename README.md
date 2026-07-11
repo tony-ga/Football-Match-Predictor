@@ -51,13 +51,16 @@ Estado y despliegue:
 - El bot guarda el flujo en memoria por chat.
 - Si reinicias el proceso, o si la conversación expira, el usuario debe volver a usar `/start` o `/menu`.
 - El timeout de conversación está configurado para reiniciar el menú automáticamente.
+- El catálogo del bot sale de los datos derivados del Mundial disponibles en `data/derived/*.jsonl`.
+- Prediccion, Parlay, Time lines y Analisis navegan primero por fase del torneo y después por partido.
 
 Y muestra un menú inicial con:
 
-- `Prediccion`
-- `Generar Parlay`
-- `Time lines de partidos`
-- `Datos de jugadores`
+- `🔮 Prediccion`
+- `🧩 Generar Parlay`
+- `⏱️ Time lines de partidos`
+- `📊 Analisis de Partidos`
+- `👤 Datos de jugadores`
 
 ## 📋 Menú Interactivo
 

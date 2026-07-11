@@ -227,7 +227,9 @@ def load_timeline_for_match(match: Dict[str, Any]) -> Dict[str, Any]:
     derived_events = derived.get("events", []) if derived else []
     has_goal_events = any((event.get("event_type") or "").lower() in {"goal", "own_goal"} for event in derived_events)
 
-    if derived and (has_goal_events or score_total == 0):
+    # The derived JSONL is sometimes partial for knockout matches.
+    # Prefer it only when it clearly contains goal events; otherwise ask ESPN.
+    if derived and has_goal_events and len(derived_events) >= 3:
         return derived
 
     fetched = _fetch_espn_timeline(match)

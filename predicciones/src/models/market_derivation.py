@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 __all__ = []
 
 
+def _poisson_cdf(k: int, lam: float) -> float:
+    if lam <= 0:
+        return 0.0
+    from math import exp, factorial
+
+    return sum(exp(-lam) * (lam ** i) / factorial(i) for i in range(k + 1))
+
+
 # ---------------------------------------------------------------------------
 # Core market derivations from score matrix
 # ---------------------------------------------------------------------------
@@ -347,6 +355,40 @@ def derive_halftime(
     }
 
 
+def derive_period_totals(
+    lambda_home: float,
+    lambda_away: float,
+    fraction: float,
+    lines: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """
+    Derive over/under goal totals for a match period.
+
+    fraction is the share of full-time goal expectation assigned to the period.
+    """
+    if lines is None:
+        lines = [0.5, 1.5, 2.5, 3.5]
+    period_home = float(np.clip(lambda_home * fraction, 0.05, 4.0))
+    period_away = float(np.clip(lambda_away * fraction, 0.05, 4.0))
+    period_total = period_home + period_away
+
+    result: Dict[str, Any] = {
+        "expected_goals": {
+            "home": round(period_home, 3),
+            "away": round(period_away, 3),
+            "total": round(period_total, 3),
+        },
+        "over_under": {},
+    }
+
+    for line in lines:
+        key = str(line).replace(".", "_")
+        result["over_under"][f"over_{key}"] = float(1.0 - _poisson_cdf(int(line + 0.5) - 1, period_total))
+        result["over_under"][f"under_{key}"] = float(1.0 - result["over_under"][f"over_{key}"])
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Full Market Bundle
 # ---------------------------------------------------------------------------
@@ -396,6 +438,10 @@ def derive_all_markets(
 
     # Halftime
     markets['halftime'] = derive_halftime(lambda_home, lambda_away, config=config)
+
+    halftime_fraction = config.get('halftime', {}).get('lambda_ht_fraction', 0.45) if config else 0.45
+    markets['first_half_goals'] = derive_period_totals(lambda_home, lambda_away, halftime_fraction)
+    markets['second_half_goals'] = derive_period_totals(lambda_home, lambda_away, 1.0 - halftime_fraction)
 
     # Goal distributions (marginals)
     markets['home_goals_distribution'] = derive_goal_distribution(matrix, 'home')

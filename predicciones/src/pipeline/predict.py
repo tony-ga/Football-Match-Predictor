@@ -18,6 +18,7 @@ from ..models.calibration import CalibrationManager
 from ..sanity.sanity_checker import run_sanity_checks
 from ..models.market_models import CornersModel, CardsModel, ShotsModel, PlayerPropsModel
 from ..ingestion.jsonl_loader import TeamMatchStatsLoader, PlayerMatchStatsLoader, MatchEventsLoader
+from ..data.corner_period_model import build_corner_period_projection
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,7 @@ def _build_alternative_markets(
     team_loader: TeamMatchStatsLoader,
     player_loader: PlayerMatchStatsLoader,
     events_loader: MatchEventsLoader,
+    espn_client: Optional[EspnWorldCupClient] = None,
 ) -> Dict[str, Any]:
     """
     Build alternative markets (corners, cards, SOT, player props) from derived datasets.
@@ -249,19 +251,76 @@ def _build_alternative_markets(
     # Get team aggregate stats
     home_stats = team_loader.get_aggregate_stats(home_team, max_matches=10)
     away_stats = team_loader.get_aggregate_stats(away_team, max_matches=10)
+
+    def _espn_team_stats(team_name: str, max_matches: int = 8) -> Dict[str, Any]:
+        if espn_client is None:
+            return {}
+        try:
+            matches = espn_client.get_recent_team_matches(team_name, days_back=180, max_matches=max_matches)
+        except Exception as exc:
+            logger.debug("ESPN fallback failed for %s: %s", team_name, exc)
+            return {}
+        stats: Dict[str, List[float]] = {
+            "corners_for": [],
+            "corners_against": [],
+            "cards": [],
+            "shots_on_target": [],
+        }
+        for match in matches:
+            if not match.get("completed"):
+                continue
+            match_stats = match.get("stats", {}) or {}
+            if match.get("is_home"):
+                corners_for = match_stats.get("home_corners")
+                corners_against = match_stats.get("away_corners")
+                cards = match_stats.get("home_total_cards")
+                sot = match_stats.get("home_shots_on_target")
+            else:
+                corners_for = match_stats.get("away_corners")
+                corners_against = match_stats.get("home_corners")
+                cards = match_stats.get("away_total_cards")
+                sot = match_stats.get("away_shots_on_target")
+            if corners_for is not None:
+                stats["corners_for"].append(float(corners_for))
+            if corners_against is not None:
+                stats["corners_against"].append(float(corners_against))
+            if cards is not None:
+                stats["cards"].append(float(cards))
+            if sot is not None:
+                stats["shots_on_target"].append(float(sot))
+
+        if not stats["corners_for"] and not stats["cards"] and not stats["shots_on_target"]:
+            return {}
+        return {
+            "sample_size": len(stats["corners_for"]),
+            "corners_avg": round(sum(stats["corners_for"]) / max(len(stats["corners_for"]), 1), 2) if stats["corners_for"] else None,
+            "cards_avg": round(sum(stats["cards"]) / max(len(stats["cards"]), 1), 2) if stats["cards"] else None,
+            "sot_avg": round(sum(stats["shots_on_target"]) / max(len(stats["shots_on_target"]), 1), 2) if stats["shots_on_target"] else None,
+            "matches_with_corners": len(stats["corners_for"]),
+            "matches_with_cards": len(stats["cards"]),
+            "matches_with_sot": len(stats["shots_on_target"]),
+        }
     
     # Check data availability
+    if home_stats.get("matches_with_corners", 0) < 3 or away_stats.get("matches_with_corners", 0) < 3:
+        espn_home = _espn_team_stats(home_team)
+        espn_away = _espn_team_stats(away_team)
+        if espn_home:
+            home_stats = {**home_stats, **{k: espn_home.get(k, home_stats.get(k)) for k in espn_home}}
+        if espn_away:
+            away_stats = {**away_stats, **{k: espn_away.get(k, away_stats.get(k)) for k in espn_away}}
+
     has_corners_data = (
-        home_stats.get("matches_with_corners", 0) >= 3 or 
-        away_stats.get("matches_with_corners", 0) >= 3
+        home_stats.get("matches_with_corners", 0) >= 2 or 
+        away_stats.get("matches_with_corners", 0) >= 2
     )
     has_cards_data = (
-        home_stats.get("matches_with_cards", 0) >= 3 or
-        away_stats.get("matches_with_cards", 0) >= 3
+        home_stats.get("matches_with_cards", 0) >= 2 or
+        away_stats.get("matches_with_cards", 0) >= 2
     )
     has_sot_data = (
-        home_stats.get("matches_with_sot", 0) >= 3 or
-        away_stats.get("matches_with_sot", 0) >= 3
+        home_stats.get("matches_with_sot", 0) >= 2 or
+        away_stats.get("matches_with_sot", 0) >= 2
     )
     has_events_data = events_loader.has_data()
     
@@ -293,6 +352,14 @@ def _build_alternative_markets(
             home_sample_size=home_corners_ss,
             away_sample_size=away_corners_ss,
         )
+        corner_period_projection = build_corner_period_projection(
+            home_team,
+            away_team,
+            float(team_corners_pred.get("home_lambda", home_corners_avg)),
+            float(team_corners_pred.get("away_lambda", away_corners_avg)),
+            home_sample_size=home_corners_ss,
+            away_sample_size=away_corners_ss,
+        )
         
         corners_market = {
             "available": True,
@@ -303,6 +370,7 @@ def _build_alternative_markets(
             "first_corner": {"available": has_events_data} if has_events_data else {"available": False, "reason": "No event sequence data"},
             "sample_size": home_corners_ss + away_corners_ss,
             "effective_sample_size": total_corners_pred.get("effective_sample_size", home_corners_ss + away_corners_ss),
+            "periods": corner_period_projection,
         }
     else:
         corners_market = {
@@ -632,7 +700,8 @@ def predict_match_pipeline(
             alternative_markets = _build_alternative_markets(
                 home_team, away_team,
                 lambda_h, lambda_a,
-                team_loader, player_loader, events_loader
+                team_loader, player_loader, events_loader,
+                espn_client=espn_client
             )
             logger.info(f"Built alternative markets: corners={alternative_markets.get('corners', {}).get('available')}, cards={alternative_markets.get('cards', {}).get('available')}, sot={alternative_markets.get('shots_on_target', {}).get('available')}, player_props={alternative_markets.get('player_props', {}).get('available')}")
         except Exception as e:
