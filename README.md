@@ -31,6 +31,34 @@ python app.py config --all
 python app.py recent --limit 10
 ```
 
+### Bot de Telegram
+
+El proyecto también puede ejecutarse como bot de Telegram con polling.
+
+```bash
+export BOT_TOKEN="tu_token_aqui"
+python telegram_bot.py
+```
+
+El bot expone estos comandos:
+
+- `/start`
+- `/menu`
+- `/help`
+
+Estado y despliegue:
+
+- El bot guarda el flujo en memoria por chat.
+- Si reinicias el proceso, o si la conversación expira, el usuario debe volver a usar `/start` o `/menu`.
+- El timeout de conversación está configurado para reiniciar el menú automáticamente.
+
+Y muestra un menú inicial con:
+
+- `Prediccion`
+- `Generar Parlay`
+- `Time lines de partidos`
+- `Datos de jugadores`
+
 ## 📋 Menú Interactivo
 
 Al ejecutar `python app.py` sin argumentos, verás el siguiente menú:
