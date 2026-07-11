@@ -947,6 +947,18 @@ def run_parlay_builder(console: Console) -> None:
     match_idx = int(choice) - 1
     home_team, away_team, match_date = all_matches[match_idx]
     
+    # Extract neutral_venue from the fixture row if available
+    neutral_venue = False
+    try:
+        fixture_path = fixture['path']
+        df_fix = pd.read_csv(fixture_path)
+        match_row = df_fix[(df_fix['home_team'] == home_team) & (df_fix['away_team'] == away_team)]
+        if not match_row.empty and 'neutral_venue' in match_row.columns:
+            nv_val = match_row['neutral_venue'].iloc[0]
+            neutral_venue = bool(nv_val) if pd.notna(nv_val) else False
+    except Exception:
+        pass  # Default to False if we can't read the fixture
+    
     # Step 3: Try to load calibrators
     calib_manager = CalibrationManager()
     project_root = Path(__file__).parent.parent.parent.parent
@@ -980,7 +992,7 @@ def run_parlay_builder(console: Console) -> None:
     
     # Step 4: Generate prediction for this match
     console.print(f"\n[dim]Generating predictions for {home_team} vs {away_team}...[/dim]\n")
-    predict_kwargs = {"include_markets": False}
+    predict_kwargs = {"include_markets": False, "neutral_venue": neutral_venue}
     if isinstance(match_date, str) and match_date:
         predict_kwargs["match_date"] = match_date
     pred = predict_match_pipeline(home_team, away_team, **predict_kwargs)

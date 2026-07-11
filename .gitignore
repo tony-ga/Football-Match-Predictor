@@ -1,1 +1,1 @@
-Nothing needs to be added to .gitignore since the only modified file is a JSON data file (`predicciones/data/ratings_wc2026.json`) which appears to be source/config content rather than build artifacts, dependencies, or temporary files.
+Nothing needs to be added to the .gitignore file since only a Python source file was modified and no build artifacts, dependencies, or temporary files were detected in the changes.
