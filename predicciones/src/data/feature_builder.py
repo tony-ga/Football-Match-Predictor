@@ -198,15 +198,43 @@ class MatchFeatureBuilder:
         lambda_defense_espn = max(0.7, min(2.2, lambda_defense_espn))
         
         # Shrinkage hacia el rating/base cuando haya pocos partidos
+        # CLAVE: Usar shrinkage MAS AGRESIVO para torneos internacionales con sample pequeno
+        # FIFA rankings reflejan calidad real; resultados de 5-8 partidos pueden ser ruido
         base_attack = base_rating.get("attack", 1.10)
         base_defense = base_rating.get("defense", 1.00)
+        fifa_rank = base_rating.get("fifa_rank", 100)
         
+        # Calcular shrinkage factor basado en FIFA rank y numero de partidos
+        # Equipos top-10: mas confianza en base rating (shrinkage alto)
+        # Equipos low-rank: si tienen buen form, permitir algo de credito pero con cautela
+        if fifa_rank <= 10:
+            # Elite teams: strong prior towards their established quality
+            min_shrink = 0.5  # At least 50% weight to base rating
+            max_shrink = 0.8  # Up to 80% weight to base rating
+        elif fifa_rank <= 20:
+            min_shrink = 0.4
+            max_shrink = 0.7
+        elif fifa_rank <= 40:
+            min_shrink = 0.3
+            max_shrink = 0.6
+        else:
+            # Low-ranked teams: allow more credit for good form but still cautious
+            min_shrink = 0.2
+            max_shrink = 0.5
+        
+        # Interpolar shrinkage basado en numero de partidos
         if n_matches < 3:
-            # Mezclar: más peso al base rating
             shrink_factor = n_matches / 3.0  # 0 a 1
-            lambda_attack_espn = (1 - shrink_factor) * base_attack + shrink_factor * lambda_attack_espn
-            lambda_defense_espn = (1 - shrink_factor) * base_defense + shrink_factor * lambda_defense_espn
-            warnings.append(f"Using blended ESPN/base profile for team {team_name} (only {n_matches} matches)")
+            actual_shrink = min_shrink + (max_shrink - min_shrink) * (1 - shrink_factor)
+        else:
+            # Even with 5+ matches, keep significant shrinkage for international football
+            actual_shrink = min_shrink + (max_shrink - min_shrink) * 0.3
+        
+        # Aplicar shrinkage: lambda_final = (1 - actual_shrink) * espn + actual_shrink * base
+        # Pero invertimos: queremos que base tenga peso de actual_shrink
+        lambda_attack_espn = (1 - actual_shrink) * lambda_attack_espn + actual_shrink * base_attack
+        lambda_defense_espn = (1 - actual_shrink) * lambda_defense_espn + actual_shrink * base_defense
+        warnings.append(f"Shrinkage applied: {actual_shrink:.2f} weight to base rating (FIFA rank {fifa_rank}, {n_matches} matches)")
         
         # Form string
         form_str = f"W{wins} D{draws} L{losses}"

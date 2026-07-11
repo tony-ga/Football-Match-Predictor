@@ -692,8 +692,8 @@ def render_same_game_parlay_report(
     
     console.print("\n[bold blue]=== SAME GAME PARLAY BUILDER ===[/bold blue]\n")
     
-    # Show match summary
-    markets = pred_data['predictions']
+    # Show match summary - use calibrated predictions if available
+    markets = pred_data.get('predictions_calibrated', pred_data['predictions'])
     total_lambda = (
         pred_data['team_context']['home']['lambda_attack'] +
         pred_data['team_context']['away']['lambda_attack']
