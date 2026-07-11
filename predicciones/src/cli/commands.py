@@ -1349,9 +1349,36 @@ def predict_command(
             console.print(f"\n[green]✓ Predictions saved to {output_file}[/green]")
             
             # Ask user if they want to view predictions in terminal
-            from rich.prompt import Confirm
+            from rich.prompt import Confirm, Prompt
             if Confirm.ask("\n[cyan]Do you want to view the predictions in the terminal?[/cyan]", default=True):
-                _display_predictions_table(console, results, fixtures)
+                # Show list of matches and let user select which one to view
+                if len(results) > 1:
+                    console.print("\n[bold]Available matches:[/bold]")
+                    for idx, result in enumerate(results, 1):
+                        home = result.get('home_team', 'Unknown')
+                        away = result.get('away_team', 'Unknown')
+                        console.print(f"  [cyan]{idx}.[/cyan] {home} vs {away}")
+                    
+                    selection = Prompt.ask(
+                        f"\n[cyan]Which match do you want to view? (1-{len(results)}, or 'all')[/cyan]",
+                        default="all"
+                    )
+                    
+                    if selection.lower() == 'all':
+                        _display_predictions_table(console, results, fixtures)
+                    else:
+                        try:
+                            idx = int(selection) - 1
+                            if 0 <= idx < len(results):
+                                _display_predictions_table(console, [results[idx]], fixtures)
+                            else:
+                                console.print("[yellow]Invalid selection. Showing all predictions.[/yellow]")
+                                _display_predictions_table(console, results, fixtures)
+                        except ValueError:
+                            console.print("[yellow]Invalid input. Showing all predictions.[/yellow]")
+                            _display_predictions_table(console, results, fixtures)
+                else:
+                    _display_predictions_table(console, results, fixtures)
         else:
             console.print("[yellow]No predictions generated.[/yellow]")
             

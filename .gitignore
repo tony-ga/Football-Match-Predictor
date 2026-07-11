@@ -1,28 +1,40 @@
 ```
-# Build artifacts and outputs
-output/
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Dependencies
+.venv/
+venv/
+pip-wheel-metadata/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
 
 # Environment files
 .env
 .env.local
 *.env.*
 
-# Dependencies
-node_modules/
-.venv/
-venv/
-__pycache__/
-*.pyc
-
-# Logs and temporary files
-*.log
-*.tmp
-
 # Editors
 .vscode/
 .idea/
 
-# OS generated files
-.DS_Store
-Thumbs.db
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# Distribution artifacts
+dist/
+build/
+*.egg-info/
+
+# Pytest cache
+.pytest_cache/
+
+# MyPy cache
+.mypy_cache/
 ```

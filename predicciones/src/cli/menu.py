@@ -189,8 +189,33 @@ class InteractiveMenu:
                 continue
 
             if preview_fixture_selection(df, self.console):
-                # Build fixture file
-                fixture_path = build_fixture_file_from_matches(df)
+                # Ask user which matches they want to generate
+                self.console.print("\n[bold]Select matches to predict:[/bold]")
+                for idx, row in df.iterrows():
+                    home = row.get('home_team', 'Unknown')
+                    away = row.get('away_team', 'Unknown')
+                    self.console.print(f"  [cyan]{idx + 1}.[/cyan] {home} vs {away}")
+                
+                selection = Prompt.ask(
+                    f"\n[cyan]Enter match numbers (comma-separated, e.g., 1,3,5) or 'all'[/cyan]",
+                    default="all"
+                )
+                
+                if selection.lower() == 'all':
+                    selected_df = df
+                else:
+                    try:
+                        indices = [int(x.strip()) - 1 for x in selection.split(',')]
+                        selected_df = df.iloc[indices]
+                        if len(selected_df) == 0:
+                            self.console.print("[yellow]No valid selections. Using all matches.[/yellow]")
+                            selected_df = df
+                    except ValueError:
+                        self.console.print("[yellow]Invalid input. Using all matches.[/yellow]")
+                        selected_df = df
+                
+                # Build fixture file with selected matches only
+                fixture_path = build_fixture_file_from_matches(selected_df)
                 self.console.print(f"[green]✓ Fixture file created at {fixture_path}[/green]")
                 
                 # Run predictions

@@ -665,6 +665,8 @@ def predict_match_pipeline(
 
     # Construct output JSON with enriched team context
     response = {
+        "home_team": home_team,
+        "away_team": away_team,
         "match": f"{home_team} vs {away_team}",
         "predictions": final_markets,
         "sportsbook_odds": sportsbook_odds,
